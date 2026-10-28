@@ -1,0 +1,1100 @@
+import SwiftUI
+
+// MARK: - Shared Settings Fluid Tooltip (Design System Standard)
+
+/// Standard tooltip placement relative to the trigger.
+enum SettingsTooltipPlacement: Sendable {
+    case top
+    case bottom
+}
+
+/// Identifies which window hosts a tooltip, so the process-wide coordinator never
+/// renders a Settings-relative bubble inside another window (and vice versa).
+enum SettingsTooltipHostScope: String, Sendable, Equatable {
+    case settings
+    case selectionAsk
+
+    var coordinateSpaceName: String { "TooltipHostCoordinateSpace.\(rawValue)" }
+}
+
+private struct SettingsTooltipHostScopeKey: EnvironmentKey {
+    static let defaultValue: SettingsTooltipHostScope = .settings
+}
+
+extension EnvironmentValues {
+    var settingsTooltipHostScope: SettingsTooltipHostScope {
+        get { self[SettingsTooltipHostScopeKey.self] }
+        set { self[SettingsTooltipHostScopeKey.self] = newValue }
+    }
+}
+
+/// Global coordinator for rendering tooltips at the root window layer.
+/// This completely decouples tooltips from child view hierarchies and prevents
+/// them from ever being clipped by parent ScrollViews, cards, or `.clipShape()` containers.
+@MainActor
+@Observable
+final class SettingsTooltipCoordinator {
+    static let shared = SettingsTooltipCoordinator()
+
+    struct TooltipState: Equatable {
+        let id: UUID
+        let scope: SettingsTooltipHostScope
+        let text: String
+        var targetRect: CGRect
+        let placement: SettingsTooltipPlacement
+    }
+
+    var activeTooltip: TooltipState?
+    var isPresented: Bool = false
+    /// Measured size of the currently rendered bubble; the position clamps
+    /// in `SettingsTooltipRootHost` rely on it to stay inside the window.
+    var activeBubbleSize: CGSize?
+
+    private var showTask: Task<Void, Never>?
+    private var hideTask: Task<Void, Never>?
+    private var currentHoverID: UUID?
+
+    func show(
+        id: UUID,
+        scope: SettingsTooltipHostScope,
+        text: String,
+        targetRect: CGRect,
+        placement: SettingsTooltipPlacement
+    ) {
+        currentHoverID = id
+        hideTask?.cancel()
+        hideTask = nil
+
+        activeBubbleSize = nil
+
+        showTask?.cancel()
+        showTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 80_000_000) // 80ms delay
+            guard !Task.isCancelled, currentHoverID == id else { return }
+            activeTooltip = TooltipState(
+                id: id,
+                scope: scope,
+                text: text,
+                targetRect: targetRect,
+                placement: placement
+            )
+            withAnimation(.easeOut(duration: 0.15)) {
+                isPresented = true
+            }
+        }
+    }
+
+    func updateTargetRect(id: UUID, targetRect: CGRect) {
+        guard activeTooltip?.id == id else { return }
+        activeTooltip?.targetRect = targetRect
+    }
+
+    func updateActiveSize(_ size: CGSize) {
+        guard activeTooltip != nil else { return }
+        activeBubbleSize = size
+    }
+
+    func hide(id: UUID) {
+        // A hover-enter for another trigger can arrive before this trigger's
+        // hover-exit. Ignore the stale exit so it cannot cancel the new owner's
+        // pending show and strand `activeTooltip` with `isPresented == false`.
+        guard currentHoverID == id || currentHoverID == nil else { return }
+        currentHoverID = nil
+        showTask?.cancel()
+        showTask = nil
+
+        hideTask?.cancel()
+        hideTask = Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.05)) {
+                isPresented = false
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms exit
+            guard !Task.isCancelled, currentHoverID == nil else { return }
+            activeTooltip = nil
+            activeBubbleSize = nil
+        }
+    }
+}
+
+/// Standard fluid tooltip bubble used across Type4Me settings.
+/// Complies with Transitions.dev open/close specification:
+/// - 80ms hover entrance delay (prevents accidental trigger while sweeping cursor)
+/// - 150ms ease-out entrance with 0.98 scale transition anchored at boundary
+/// - 0ms exit delay with instant 50ms ease-out exit transition
+/// - Clean card surface (TF.settingsCard, 1px subtle stroke, soft ambient and contact drop shadow)
+/// - Respects accessibilityReduceMotion
+struct SettingsTooltipBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(TF.settingsText)
+            .lineLimit(3)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 260, alignment: .center)
+            .fixedSize(horizontal: true, vertical: true)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(TF.settingsCard)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(TF.settingsInk.opacity(0.06), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.03), radius: 2, x: 0, y: 1)
+            .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 2)
+            .allowsHitTesting(false)
+    }
+}
+
+/// Root host overlay mounted at the top-level window layer.
+struct SettingsTooltipRootHost: View {
+    let scope: SettingsTooltipHostScope
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let coordinator = SettingsTooltipCoordinator.shared
+
+    var body: some View {
+        GeometryReader { windowGeo in
+            if let tooltip = coordinator.activeTooltip, tooltip.scope == scope {
+                SettingsTooltipBubble(text: tooltip.text)
+                    .scaleEffect(
+                        reduceMotion ? 1.0 : (coordinator.isPresented ? 1.0 : 0.98),
+                        anchor: scaleAnchor(for: tooltip.placement)
+                    )
+                    .opacity(coordinator.isPresented ? 1.0 : 0.0)
+                    .background(
+                        // Measure the bubble's actual (wrapped) size so the
+                        // window-edge clamps below stay accurate for long text.
+                        // onChange alone misses the first layout pass, so seed
+                        // the size via onAppear too.
+                        GeometryReader { bubbleGeo in
+                            Color.clear
+                                .onAppear {
+                                    coordinator.updateActiveSize(bubbleGeo.size)
+                                }
+                                .onChange(of: bubbleGeo.size) { _, newSize in
+                                    coordinator.updateActiveSize(newSize)
+                                }
+                        }
+                    )
+                    .position(calculatedPosition(for: tooltip, in: windowGeo.size))
+                    .allowsHitTesting(false)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func scaleAnchor(for placement: SettingsTooltipPlacement) -> UnitPoint {
+        switch placement {
+        case .top: return .bottom
+        case .bottom: return .top
+        }
+    }
+
+    private func calculatedPosition(
+        for tooltip: SettingsTooltipCoordinator.TooltipState,
+        in windowSize: CGSize
+    ) -> CGPoint {
+        let target = tooltip.targetRect
+        let bubbleSize = coordinator.activeBubbleSize ?? CGSize(width: 140, height: 28)
+        let gap: CGFloat = 8
+
+        var y: CGFloat
+        switch tooltip.placement {
+        case .top:
+            y = target.minY - gap - (bubbleSize.height / 2)
+            // Auto flip to bottom if clipped by window top
+            if y - (bubbleSize.height / 2) < 8 {
+                y = target.maxY + gap + (bubbleSize.height / 2)
+            }
+        case .bottom:
+            y = target.maxY + gap + (bubbleSize.height / 2)
+            // Auto flip to top if clipped by window bottom
+            if y + (bubbleSize.height / 2) > windowSize.height - 8 {
+                y = target.minY - gap - (bubbleSize.height / 2)
+            }
+        }
+
+        // Keep the whole bubble (not just its center) inside the window.
+        let margin: CGFloat = 12
+        let minX = margin + bubbleSize.width / 2
+        let maxX = max(minX, windowSize.width - margin - bubbleSize.width / 2)
+        let x = min(max(target.midX, minX), maxX)
+
+        return CGPoint(x: x, y: y)
+    }
+}
+
+private struct SettingsFluidTooltipModifier: ViewModifier {
+    let text: String
+    let placement: SettingsTooltipPlacement
+    let isEnabled: Bool
+
+    @Environment(\.settingsTooltipHostScope) private var scope
+    @State private var id = UUID()
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onChange(of: isHovered) { _, hovering in
+                            guard isEnabled else { return }
+                            if hovering {
+                                let frame = geo.frame(in: .named(scope.coordinateSpaceName))
+                                if frame.width > 0 && frame.height > 0 {
+                                    SettingsTooltipCoordinator.shared.show(
+                                        id: id,
+                                        scope: scope,
+                                        text: text,
+                                        targetRect: frame,
+                                        placement: placement
+                                    )
+                                }
+                            } else {
+                                SettingsTooltipCoordinator.shared.hide(id: id)
+                            }
+                        }
+                        .onChange(of: geo.frame(in: .named(scope.coordinateSpaceName))) { _, newFrame in
+                            if isHovered && isEnabled && newFrame.width > 0 {
+                                SettingsTooltipCoordinator.shared.updateTargetRect(id: id, targetRect: newFrame)
+                            }
+                        }
+                }
+            )
+            .onHover { hovering in
+                guard isEnabled else { return }
+                isHovered = hovering
+            }
+            .onDisappear {
+                SettingsTooltipCoordinator.shared.hide(id: id)
+            }
+    }
+}
+
+extension View {
+    /// Mounts a window-level tooltip host and scopes every `settingsTooltip` in the
+    /// subtree to it, so concurrently visible windows never render each other's bubbles.
+    func settingsTooltipHost(_ scope: SettingsTooltipHostScope) -> some View {
+        coordinateSpace(name: scope.coordinateSpaceName)
+            .overlay { SettingsTooltipRootHost(scope: scope) }
+            .environment(\.settingsTooltipHostScope, scope)
+    }
+
+    /// Standard Settings Tooltip modifier with Apple-grade fluid animation and zero-clipping window-level host.
+    func settingsTooltip(
+        _ text: String,
+        placement: SettingsTooltipPlacement = .top,
+        isEnabled: Bool = true
+    ) -> some View {
+        modifier(SettingsFluidTooltipModifier(text: text, placement: placement, isEnabled: isEnabled))
+    }
+
+    /// Alias for `settingsTooltip`.
+    func fluidTooltip(
+        _ text: String,
+        placement: SettingsTooltipPlacement = .top,
+        isEnabled: Bool = true
+    ) -> some View {
+        settingsTooltip(text, placement: placement, isEnabled: isEnabled)
+    }
+}
+
+// MARK: - Shared Types
+
+enum SettingsTestStatus: Equatable {
+    case idle, testing, saved
+    /// Carries the round-trip time of the successful test.
+    case success(Duration)
+    case failed(String)
+    /// Informational message unrelated to a test outcome; shown without a failure mark.
+    case notice(String)
+}
+
+/// One successful connection test, shown briefly as a latency toast.
+struct SettingsLatencyToast: Equatable, Identifiable {
+    let id = UUID()
+    let latency: Duration
+
+    /// "842 ms" below one second, "1.24 s" above.
+    var formattedLatency: String {
+        let ms = Double(latency.components.seconds) * 1000
+            + Double(latency.components.attoseconds) / 1e15
+        if ms < 1000 {
+            return "\(Int(ms.rounded())) ms"
+        }
+        return String(format: "%.2f s", ms / 1000)
+    }
+
+    var message: String {
+        String(format: L("连接成功 · 时延 %@", "Connected · %@ latency"), formattedLatency)
+    }
+}
+
+struct SettingsLatencyToastView: View {
+    let toast: SettingsLatencyToast
+
+    var body: some View {
+        let message = toast.message
+        HStack(spacing: 6) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(TF.settingsAccentGreen)
+            Text(message)
+                .foregroundStyle(TF.settingsText)
+                .monospacedDigit()
+        }
+        .font(.system(size: 12, weight: .medium))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(TF.settingsCard))
+        .overlay(Capsule().strokeBorder(TF.settingsTextTertiary.opacity(0.2)))
+        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(message)
+    }
+}
+
+// MARK: - Shared UI Helpers
+
+protocol SettingsCardHelpers {}
+
+enum SettingsControlWidth {
+    static let toggle: CGFloat = 52
+    static let inlineSegmented: CGFloat = 140
+    static let standard: CGFloat = 240
+    static let provider: CGFloat = 320
+    static let input: CGFloat = 360
+}
+
+private struct SettingsOptionRowLayout: Layout {
+    let controlWidth: CGFloat
+    private let horizontalSpacing: CGFloat = 24
+    private let verticalSpacing: CGFloat = 10
+    private let minimumLabelWidth: CGFloat = 220
+    private let minimumRowHeight: CGFloat = 56
+
+    private func usesHorizontalLayout(availableWidth: CGFloat) -> Bool {
+        availableWidth >= minimumLabelWidth + horizontalSpacing + controlWidth
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        let availableWidth = proposal.width
+            ?? (minimumLabelWidth + horizontalSpacing + controlWidth)
+
+        if usesHorizontalLayout(availableWidth: availableWidth) {
+            let labelWidth = availableWidth - horizontalSpacing - controlWidth
+            let labelSize = subviews[0].sizeThatFits(
+                ProposedViewSize(width: labelWidth, height: nil)
+            )
+            let controlSize = subviews[1].sizeThatFits(
+                ProposedViewSize(width: controlWidth, height: nil)
+            )
+            return CGSize(
+                width: availableWidth,
+                height: max(minimumRowHeight, labelSize.height + 20, controlSize.height + 20)
+            )
+        }
+
+        let labelSize = subviews[0].sizeThatFits(
+            ProposedViewSize(width: availableWidth, height: nil)
+        )
+        let controlSize = subviews[1].sizeThatFits(
+            ProposedViewSize(width: availableWidth, height: nil)
+        )
+        return CGSize(
+            width: availableWidth,
+            height: labelSize.height + verticalSpacing + controlSize.height + 20
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard subviews.count == 2 else { return }
+
+        if usesHorizontalLayout(availableWidth: bounds.width) {
+            let labelWidth = bounds.width - horizontalSpacing - controlWidth
+            let labelSize = subviews[0].sizeThatFits(
+                ProposedViewSize(width: labelWidth, height: nil)
+            )
+            let controlSize = subviews[1].sizeThatFits(
+                ProposedViewSize(width: controlWidth, height: nil)
+            )
+
+            // When control is multi-line (e.g. dropdown + custom textfield),
+            // align label with the vertical center of the top 36pt row.
+            let labelY = bounds.minY + 18 + 10
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: labelY),
+                anchor: .leading,
+                proposal: ProposedViewSize(width: labelWidth, height: labelSize.height)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.maxX, y: bounds.minY + 10),
+                anchor: .topTrailing,
+                proposal: ProposedViewSize(width: controlWidth, height: controlSize.height)
+            )
+        } else {
+            let contentWidth = bounds.width
+            let labelSize = subviews[0].sizeThatFits(
+                ProposedViewSize(width: contentWidth, height: nil)
+            )
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + 10),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: contentWidth, height: labelSize.height)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + 10 + labelSize.height + verticalSpacing),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: contentWidth, height: nil)
+            )
+        }
+    }
+}
+
+@MainActor
+extension SettingsCardHelpers {
+
+    func settingsOptionRow<Control: View>(
+        _ label: String,
+        subtitle: String? = nil,
+        controlWidth: CGFloat = SettingsControlWidth.standard,
+        isIndented: Bool = false,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        SettingsOptionRowLayout(controlWidth: controlWidth) {
+            settingsOptionLabel(label, subtitle: subtitle)
+                .padding(.leading, isIndented ? 18 : 0)
+            control()
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    func settingsToggleRow(
+        _ label: String,
+        subtitle: String? = nil,
+        isOn: Binding<Bool>,
+        isEnabled: Bool = true,
+        isIndented: Bool = false
+    ) -> some View {
+        settingsOptionRow(
+            label,
+            subtitle: subtitle,
+            controlWidth: SettingsControlWidth.toggle,
+            isIndented: isIndented
+        ) {
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(TF.settingsInk)
+                .disabled(!isEnabled)
+        }
+        .opacity(isEnabled ? 1.0 : 0.45)
+    }
+
+    private func settingsOptionLabel(_ label: String, subtitle: String?) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(TF.settingsText)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    func settingsGroupCard<Content: View>(
+        _ title: String,
+        icon: String? = nil,
+        trailing: AnyView? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(TF.settingsText)
+                }
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(TF.settingsText)
+                Spacer()
+                if let trailing {
+                    trailing
+                }
+            }
+            .padding(.horizontal, 2)
+
+            VStack(alignment: .leading, spacing: 0) {
+                content()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(TF.settingsBorder, lineWidth: 1)
+                    )
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    func settingsField(_ label: String, subtitle: String? = nil, text: Binding<String>, prompt: String) -> some View {
+        settingsOptionRow(label, subtitle: subtitle, controlWidth: SettingsControlWidth.input) {
+            FixedWidthTextField(text: text, placeholder: prompt)
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+        }
+    }
+
+    func settingsMultilineField(_ label: String, subtitle: String? = nil, text: Binding<String>, prompt: String) -> some View {
+        settingsOptionRow(label, subtitle: subtitle, controlWidth: SettingsControlWidth.input) {
+            ZStack(alignment: .topLeading) {
+                if text.wrappedValue.isEmpty {
+                    Text(prompt)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+                SettingsCodeTextEditor(text: text)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+            }
+            .frame(height: 88)
+            .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+        }
+    }
+
+    func settingsPickerField(_ label: String, subtitle: String? = nil, selection: Binding<String>, options: [FieldOption]) -> some View {
+        settingsOptionRow(label, subtitle: subtitle, controlWidth: SettingsControlWidth.input) {
+            settingsDropdown(
+                selection: selection,
+                options: options.map { ($0.value, $0.label) }
+            )
+        }
+    }
+
+    func settingsSecureField(_ label: String, text: Binding<String>, prompt: String) -> some View {
+        settingsOptionRow(label, controlWidth: SettingsControlWidth.input) {
+            SettingsSecureInputField(text: text, prompt: prompt)
+        }
+    }
+
+    func credentialSummaryCard(rows: [(String, String)]) -> some View {
+        return VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, item in
+                if index > 0 { SettingsDivider() }
+                settingsOptionRow(item.0, controlWidth: SettingsControlWidth.input) {
+                    HStack {
+                        Text(item.1)
+                            .font(.system(size: 13))
+                            .foregroundStyle(TF.settingsTextSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(TF.settingsCardAlt)
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Custom Controls
+
+    /// Custom dropdown whose visible width follows the current selection.
+    func settingsDropdown(
+        selection: Binding<String>,
+        options: [(value: String, label: String)],
+        icon: String? = nil
+    ) -> some View {
+        let currentLabel = options.first(where: { $0.value == selection.wrappedValue })?.label ?? selection.wrappedValue
+        return Menu {
+            ForEach(options, id: \.value) { option in
+                Toggle(isOn: Binding(
+                    get: { option.value == selection.wrappedValue },
+                    set: { if $0 { selection.wrappedValue = option.value } }
+                )) {
+                    Text(option.label)
+                }
+            }
+        } label: {
+            settingsDropdownLabel(currentLabel, icon: icon)
+        }
+        .buttonStyle(.plain)
+    }
+
+    func settingsDropdownLabel(
+        _ label: String,
+        icon: String? = nil
+    ) -> some View {
+        HStack(spacing: 8) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(TF.settingsText)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(TF.settingsTextTertiary)
+        }
+        .padding(.horizontal, 12)
+        .frame(minWidth: 88, minHeight: 36)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(TF.settingsCardAlt)
+        )
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Custom segmented picker with dark selected pill.
+    func settingsSegmentedPicker(selection: Binding<String>, options: [(value: String, label: String)]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(options, id: \.value) { option in
+                let isSelected = selection.wrappedValue == option.value
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        selection.wrappedValue = option.value
+                    }
+                } label: {
+                    Text(option.label)
+                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? TF.settingsOnStrong : TF.settingsText)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(isSelected ? TF.settingsNavActive : .clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(TF.settingsCardAlt)
+        )
+    }
+
+    /// Compact Apple-style inline segmented picker for 2 (or few) options in a settings option row.
+    func settingsInlineSegmentedPicker(
+        selection: Binding<String>,
+        options: [(value: String, label: String)],
+        segmentWidth: CGFloat? = nil
+    ) -> some View {
+        SettingsInlineSegmentedPicker(selection: selection, options: options, segmentWidth: segmentWidth)
+    }
+
+    /// Compact Apple-style inline segmented picker with icons and tooltips.
+    func settingsInlineIconSegmentedPicker(
+        selection: Binding<String>,
+        options: [(value: String, icon: String, label: String)],
+        segmentWidth: CGFloat? = nil
+    ) -> some View {
+        SettingsInlineSegmentedPicker(selection: selection, iconOptions: options, segmentWidth: segmentWidth)
+    }
+
+    func primaryButton(
+        _ title: String,
+        icon: String? = nil,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            settingsButtonLabel(title, icon: icon)
+        }
+        .buttonStyle(.tf(.primary))
+        .disabled(!isEnabled)
+    }
+
+    func secondaryButton(
+        _ title: String,
+        icon: String? = nil,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            settingsButtonLabel(title, icon: icon)
+        }
+        .buttonStyle(.tf(.secondary))
+        .disabled(!isEnabled)
+    }
+
+    func revertButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(L("还原", "Revert"), systemImage: "arrow.uturn.backward")
+        }
+        .buttonStyle(.tf(.ghost))
+    }
+
+    func saveButton(action: @escaping () -> Void) -> some View {
+        primaryButton(L("保存", "Save"), action: action)
+    }
+
+    /// A "test connection" button. It only reflects the in-flight test; the outcome is shown
+    /// beside it by `testResultIndicator`, so the button always returns to its idle label.
+    /// `isProminent` makes it the surface's primary action; pass `false` while a Save button
+    /// is visible so only one ink button shows at a time.
+    func testButton(
+        _ title: String,
+        status: SettingsTestStatus,
+        isEnabled: Bool = true,
+        isProminent: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isTesting = status == .testing
+        return Button(action: action) {
+            // Both labels share one frame so the button keeps its width while testing.
+            ZStack {
+                Label(title, systemImage: "bolt.fill")
+                    .opacity(isTesting ? 0 : 1)
+                    .scaleEffect(isTesting ? 0.92 : 1)
+                Label {
+                    Text(L("测试中…", "Testing…"))
+                } icon: {
+                    TFSpinner(isAnimating: isTesting)
+                }
+                .opacity(isTesting ? 1 : 0)
+                .scaleEffect(isTesting ? 1 : 0.92)
+            }
+            .animation(.easeOut(duration: 0.18), value: isTesting)
+        }
+        .buttonStyle(.tf(isProminent ? .primary : .secondary, isLoading: isTesting))
+        // Disabled while testing so no input path can restart the test;
+        // `isLoading` keeps it legible instead of dimmed.
+        .disabled(isTesting || !isEnabled)
+    }
+
+    /// Outcome of the last test or save, placed just left of the action buttons.
+    /// Failures show only a mark; the full error text stays in `testStatusMessage`.
+    @ViewBuilder
+    func testResultIndicator(status: SettingsTestStatus) -> some View {
+        switch status {
+        case .success(let latency):
+            let formatted = SettingsLatencyToast(latency: latency).formattedLatency
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(TF.settingsAccentGreen)
+                Text(formatted)
+                    .foregroundStyle(TF.settingsTextSecondary)
+                    .monospacedDigit()
+            }
+            .font(.system(size: 11, weight: .medium))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(String(format: L("连接成功，时延 %@", "Connected, %@ latency"), formatted))
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        case .saved:
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(TF.settingsAccentGreen)
+                Text(L("已保存", "Saved"))
+                    .foregroundStyle(TF.settingsTextSecondary)
+            }
+            .font(.system(size: 11, weight: .medium))
+            .accessibilityElement(children: .combine)
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(TF.settingsAccentRed)
+                .accessibilityLabel(L("测试失败", "Test failed"))
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        case .idle, .testing, .notice:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func settingsButtonLabel(_ title: String, icon: String?) -> some View {
+        if let icon {
+            Label(title, systemImage: icon)
+        } else {
+            Text(title)
+        }
+    }
+
+    @ViewBuilder
+    func testStatusMessage(status: SettingsTestStatus) -> some View {
+        switch status {
+        case .failed(let msg):
+            statusMessageLabel(msg, systemImage: "exclamationmark.circle.fill", color: TF.settingsAccentRed)
+        case .notice(let msg):
+            statusMessageLabel(msg, systemImage: "info.circle.fill", color: TF.settingsAccentAmber)
+        case .idle, .testing, .saved, .success:
+            EmptyView()
+        }
+    }
+
+    private func statusMessageLabel(_ message: String, systemImage: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10))
+            Text(message)
+                .font(.system(size: 11))
+                .lineLimit(2)
+        }
+        .foregroundStyle(color)
+        .multilineTextAlignment(.leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    func maskedSecret(_ value: String) -> String {
+        guard !value.isEmpty else { return L("未设置", "Not set") }
+        guard value.count > 8 else { return L("已保存", "Saved") }
+        let prefix = value.prefix(4)
+        let suffix = value.suffix(4)
+        return "\(prefix)••••\(suffix)"
+    }
+
+}
+
+// MARK: - Secure Input Field with Eye Toggle
+
+struct SettingsSecureInputField: View {
+    @Binding var text: String
+    var prompt: String
+    @State private var isRevealed = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if isRevealed {
+                FixedWidthTextField(text: $text, placeholder: prompt)
+            } else {
+                FixedWidthSecureField(text: $text, placeholder: prompt)
+            }
+
+            Button {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    isRevealed.toggle()
+                }
+            } label: {
+                Image(systemName: isRevealed ? "eye.slash.fill" : "eye.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(isRevealed ? TF.settingsAccentBlue : TF.settingsTextTertiary)
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .settingsTooltip(isRevealed ? L("隐藏密码", "Hide password") : L("查看明文", "Show password"))
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 36)
+        .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+    }
+}
+
+/// Plain-text editor for headers and JSON templates: monospaced, without smart quotes, dashes or autocorrect.
+struct SettingsCodeTextEditor: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        guard let textView = scrollView.documentView as? NSTextView else { return scrollView }
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.drawsBackground = false
+        textView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.textColor = NSColor(TF.settingsText)
+        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.string = text
+        textView.delegate = context.coordinator
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.text = $text
+        guard let textView = scrollView.documentView as? NSTextView, textView.string != text else { return }
+        textView.string = text
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) { self.text = text }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            text.wrappedValue = textView.string
+        }
+    }
+}
+
+/// Apple-grade inline segmented capsule picker with smooth matched-geometry sliding spring pill.
+struct SettingsInlineSegmentedPicker: View {
+    struct Option {
+        let value: String
+        let label: String
+        let icon: String?
+
+        init(value: String, label: String, icon: String? = nil) {
+            self.value = value
+            self.label = label
+            self.icon = icon
+        }
+    }
+
+    @Binding var selection: String
+    let options: [Option]
+    var segmentWidth: CGFloat? = nil
+
+    init(
+        selection: Binding<String>,
+        options: [(value: String, label: String)],
+        segmentWidth: CGFloat? = nil
+    ) {
+        self._selection = selection
+        self.options = options.map { Option(value: $0.value, label: $0.label) }
+        self.segmentWidth = segmentWidth
+    }
+
+    init(
+        selection: Binding<String>,
+        iconOptions: [(value: String, icon: String, label: String)],
+        segmentWidth: CGFloat? = nil
+    ) {
+        self._selection = selection
+        self.options = iconOptions.map { Option(value: $0.value, label: $0.label, icon: $0.icon) }
+        self.segmentWidth = segmentWidth
+    }
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selectionNamespace
+    @State private var hoveredValue: String?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.value) { option in
+                let isSelected = selection == option.value
+                let isHovered = hoveredValue == option.value
+
+                Button {
+                    guard selection != option.value else { return }
+                    if reduceMotion {
+                        selection = option.value
+                    } else {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            selection = option.value
+                        }
+                    }
+                } label: {
+                    Group {
+                        if let icon = option.icon {
+                            Image(systemName: icon)
+                                .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                                .frame(height: 14)
+                        } else {
+                            Text(option.label)
+                                .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                        }
+                    }
+                    .foregroundStyle(isSelected ? TF.settingsText : TF.settingsTextSecondary)
+                    .padding(.horizontal, option.icon != nil ? 8 : 12)
+                    .padding(.vertical, 5)
+                    .frame(width: segmentWidth)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SettingsSegmentedButtonStyle())
+                .settingsTooltip(
+                    option.label,
+                    isEnabled: option.icon != nil
+                )
+                .accessibilityLabel(option.label)
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+                .background {
+                    ZStack {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(TF.settingsCard)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(TF.settingsInk.opacity(0.04), lineWidth: 0.5)
+                                }
+                                .shadow(color: Color.black.opacity(0.08), radius: 2, x: 0, y: 1)
+                                .matchedGeometryEffect(id: "selected_segment_pill", in: selectionNamespace)
+                        } else if isHovered {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(TF.settingsInk.opacity(0.04))
+                        }
+                    }
+                }
+                .onHover { hovering in
+                    hoveredValue = hovering ? option.value : nil
+                }
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(TF.settingsCardAlt)
+        )
+        .animation(
+            reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.82),
+            value: selection
+        )
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+private struct SettingsSegmentedButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.spring(response: 0.18, dampingFraction: 0.8), value: configuration.isPressed)
+    }
+}
+
+struct SettingsListRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.16, dampingFraction: 0.75), value: configuration.isPressed)
+    }
+}

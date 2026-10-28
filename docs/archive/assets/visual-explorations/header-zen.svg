@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 280" width="840" height="280">
+  <defs>
+    <style>
+      @keyframes seal-breathe {
+        0%, 100% { opacity: 0.85; }
+        50% { opacity: 1; }
+      }
+      @keyframes brush-draw {
+        0% { stroke-dashoffset: 200; }
+        100% { stroke-dashoffset: 0; }
+      }
+      @keyframes fade-in {
+        0% { opacity: 0; }
+        100% { opacity: 1; }
+      }
+      .bg { fill: #F7F4EF; }
+      .title { fill: #2C2825; font-family: Georgia, 'Times New Roman', 'Songti SC', serif; font-weight: 400; font-size: 48px; letter-spacing: 6px; }
+      .subtitle { fill: #7A756E; font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; font-weight: 300; font-size: 15px; letter-spacing: 1px; }
+      .label { fill: #7A756E; font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; font-weight: 300; font-size: 12px; letter-spacing: 4px; }
+      .accent { fill: #C4431A; }
+      .seal { animation: seal-breathe 3s ease-in-out infinite; }
+      .divider { stroke: #DDD8CE; stroke-width: 1; }
+      .brush { stroke: #C4431A; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 200; animation: brush-draw 3s ease-out forwards; }
+      .brush2 { stroke: #C4431A; fill: none; stroke-width: 1.5; stroke-linecap: round; opacity: 0.35; stroke-dasharray: 200; animation: brush-draw 3.5s ease-out 0.3s forwards; }
+      .cta { fill: #7A756E; font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif; font-weight: 300; font-size: 13px; letter-spacing: 2px; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" width="840" height="280" rx="6"/>
+
+  <!-- Top divider -->
+  <line class="divider" x1="60" y1="50" x2="780" y2="50"/>
+
+  <!-- Left label -->
+  <text class="label" x="60" y="38">MACOS VOICE INPUT</text>
+
+  <!-- Center content -->
+  <text class="title" x="420" y="148" text-anchor="middle">以静制声</text>
+
+  <!-- Brush strokes behind title -->
+  <path class="brush" d="M 310 155 C 340 148, 400 138, 460 142 C 500 145, 520 150, 540 148" opacity="0.15"/>
+  <path class="brush2" d="M 320 160 C 360 152, 420 143, 480 147 C 510 149, 530 155, 550 152" opacity="0.1"/>
+
+  <text class="subtitle" x="420" y="180" text-anchor="middle">Type4Me  -  说话即输入，本地识别，隐私无忧</text>
+
+  <!-- Seal mark -->
+  <g class="seal" transform="translate(700, 100)">
+    <rect x="0" y="0" width="36" height="36" rx="3" fill="none" stroke="#C4431A" stroke-width="1.5"/>
+    <text x="18" y="26" text-anchor="middle" font-family="Georgia, 'Songti SC', serif" font-size="18" font-weight="400" fill="#C4431A">声</text>
+  </g>
+
+  <!-- Bottom info -->
+  <text class="cta" x="420" y="235" text-anchor="middle">FREE  &#183;  OPEN SOURCE  &#183;  MACOS 14+</text>
+
+  <!-- Bottom divider -->
+  <line class="divider" x1="60" y1="255" x2="780" y2="255"/>
+</svg>

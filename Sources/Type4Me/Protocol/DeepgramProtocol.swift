@@ -1,0 +1,229 @@
+import Foundation
+
+enum DeepgramProtocolError: Error, LocalizedError {
+    case invalidEndpoint
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidEndpoint:
+            return L("无法生成 Deepgram WebSocket URL", "Failed to build Deepgram WebSocket URL")
+        }
+    }
+}
+
+struct DeepgramTranscriptUpdate: Sendable, Equatable {
+    let transcript: RecognitionTranscript
+    let confirmedSegments: [String]
+}
+
+enum DeepgramProtocol {
+
+    private static let keywordIntensity = 2
+    private static let maxURLKeyterms = 30
+
+    /// Direct Deepgram-compatible endpoints use Deepgram's standard token
+    /// authorization. The dev-proxy endpoint uses the raw X-API-Key header
+    /// for authenticating the proxy request instead.
+    static func usesStandardAuthorization(for baseURL: String) -> Bool {
+        guard let components = URLComponents(string: baseURL),
+              components.scheme?.lowercased() == "wss",
+              let host = components.host?.lowercased()
+        else {
+            return false
+        }
+        return host == "api.deepgram.com" || host == "asr.autoloops.ai"
+    }
+
+    static func buildWebSocketURL(
+        config: DeepgramASRConfig,
+        options: ASRRequestOptions
+    ) throws -> URL {
+        guard var components = URLComponents(string: config.baseURL),
+              components.scheme?.lowercased() == "wss",
+              components.host != nil else {
+            throw DeepgramProtocolError.invalidEndpoint
+        }
+        let isFlux = DeepgramASRConfig.isFluxModel(config.model)
+        if isFlux {
+            if components.path == "/v1/listen" || components.path.isEmpty {
+                components.path = "/v2/listen"
+            }
+        }
+
+        var queryItems = [
+            URLQueryItem(name: "model", value: config.model),
+            URLQueryItem(name: "encoding", value: "linear16"),
+            URLQueryItem(name: "sample_rate", value: "16000"),
+        ]
+
+        if isFlux {
+            queryItems.append(URLQueryItem(name: "eot_threshold", value: "0.7"))
+            if config.model.localizedCaseInsensitiveContains("multi") {
+                let lang = config.language.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !lang.isEmpty && lang.lowercased() != "multi" {
+                    queryItems.append(URLQueryItem(name: "language_hint", value: lang))
+                }
+            }
+        } else {
+            queryItems.append(contentsOf: [
+                URLQueryItem(name: "language", value: config.language),
+                URLQueryItem(name: "channels", value: "1"),
+                URLQueryItem(name: "interim_results", value: "true"),
+                URLQueryItem(name: "punctuate", value: options.enablePunc ? "true" : "false"),
+                URLQueryItem(name: "smart_format", value: "true"),
+            ])
+
+            if config.numerals {
+                queryItems.append(URLQueryItem(name: "numerals", value: "true"))
+            }
+
+            let hotwords = options.hotwords
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .prefix(maxURLKeyterms)
+
+            if config.model.lowercased().hasPrefix("nova-3") {
+                queryItems.append(contentsOf: hotwords.map {
+                    URLQueryItem(name: "keyterm", value: $0)
+                })
+            } else {
+                queryItems.append(contentsOf: hotwords.map {
+                    URLQueryItem(name: "keywords", value: "\($0):\(keywordIntensity)")
+                })
+            }
+        }
+        components.queryItems = (components.queryItems ?? []) + queryItems
+
+        guard let url = components.url else {
+            throw DeepgramProtocolError.invalidEndpoint
+        }
+        return url
+    }
+
+    static func closeStreamMessage() -> String {
+        #"{"type":"CloseStream"}"#
+    }
+
+    static func makeTranscriptUpdate(
+        from data: Data,
+        confirmedSegments: [String]
+    ) throws -> DeepgramTranscriptUpdate? {
+        let decoder = JSONDecoder()
+        let envelope = try decoder.decode(Envelope.self, from: data)
+
+        let trimmedText: String
+        let isFinal: Bool
+
+        if envelope.type == "Results" {
+            let message = try decoder.decode(ResultsMessage.self, from: data)
+            let transcriptText = message.channel?.alternatives.first?.transcript ?? ""
+            trimmedText = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
+            isFinal = message.isFinal || message.speechFinal || message.fromFinalize
+        } else if envelope.type == "TurnInfo" {
+            let message = try decoder.decode(TurnInfoMessage.self, from: data)
+            let transcriptText = message.transcript ?? ""
+            trimmedText = transcriptText.trimmingCharacters(in: .whitespacesAndNewlines)
+            isFinal = message.event == "EndOfTurn"
+        } else {
+            return nil
+        }
+        var nextConfirmed = confirmedSegments
+        var partialText = ""
+
+        if !trimmedText.isEmpty {
+            let normalized = normalize(segment: trimmedText, after: confirmedSegments.joined())
+            if isFinal {
+                nextConfirmed.append(normalized)
+            } else {
+                partialText = normalized
+            }
+        } else if !isFinal || confirmedSegments.isEmpty {
+            return nil
+        }
+
+        let authoritativeText = (nextConfirmed + (partialText.isEmpty ? [] : [partialText])).joined()
+        let transcript = RecognitionTranscript(
+            confirmedSegments: nextConfirmed,
+            partialText: partialText,
+            authoritativeText: authoritativeText,
+            isFinal: isFinal
+        )
+        return DeepgramTranscriptUpdate(
+            transcript: transcript,
+            confirmedSegments: nextConfirmed
+        )
+    }
+
+    private static func normalize(segment: String, after existingText: String) -> String {
+        guard !segment.isEmpty else { return "" }
+        guard let last = existingText.last else { return segment }
+        guard let first = segment.first else { return segment }
+
+        if last.isWhitespace || first.isWhitespace {
+            return segment
+        }
+
+        if first.isClosingPunctuation || last.isOpeningPunctuation {
+            return segment
+        }
+
+        if last.isCJKUnifiedIdeograph || first.isCJKUnifiedIdeograph {
+            return segment
+        }
+
+        return " " + segment
+    }
+
+    private struct Envelope: Decodable {
+        let type: String
+    }
+
+    private struct ResultsMessage: Decodable {
+        let type: String
+        let channel: Channel?
+        let isFinal: Bool
+        let speechFinal: Bool
+        let fromFinalize: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case channel
+            case isFinal = "is_final"
+            case speechFinal = "speech_final"
+            case fromFinalize = "from_finalize"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            type = try container.decode(String.self, forKey: .type)
+            channel = try container.decodeIfPresent(Channel.self, forKey: .channel)
+            isFinal = try container.decodeIfPresent(Bool.self, forKey: .isFinal) ?? false
+            speechFinal = try container.decodeIfPresent(Bool.self, forKey: .speechFinal) ?? false
+            fromFinalize = try container.decodeIfPresent(Bool.self, forKey: .fromFinalize) ?? false
+        }
+    }
+
+    private struct TurnInfoMessage: Decodable {
+        let type: String
+        let event: String
+        let transcript: String?
+        let turnIndex: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case type
+            case event
+            case transcript
+            case turnIndex = "turn_index"
+        }
+    }
+
+    private struct Channel: Decodable {
+        let alternatives: [Alternative]
+    }
+
+    private struct Alternative: Decodable {
+        let transcript: String
+    }
+}
+
+// Character extensions moved to CharacterExtensions.swift

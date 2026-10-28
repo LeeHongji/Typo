@@ -1,0 +1,517 @@
+import Foundation
+import os
+
+actor DoubaoChatClient: LLMClient {
+
+    private let logger = Logger(subsystem: "com.type4me.llm", category: "DoubaoChatClient")
+    private let provider: LLMProvider
+    private let session: URLSession
+    private let metricsDelegate: LLMURLSessionMetricsDelegate
+
+    init(
+        provider: LLMProvider = .doubao,
+        bypassProxy: Bool = ProxyBypassMode.current.bypassLLM,
+        customSession: URLSession? = nil
+    ) {
+        self.provider = provider
+        if let customSession {
+            session = customSession
+            metricsDelegate = LLMURLSessionMetricsDelegate(providerID: provider.rawValue)
+        } else {
+            let resources = LLMURLSessionFactory.make(
+                providerID: provider.rawValue,
+                bypassProxy: bypassProxy
+            )
+            session = resources.session
+            metricsDelegate = resources.metricsDelegate
+        }
+    }
+
+    /// Pre-establish TCP+TLS connection so the first real request skips handshake.
+    func warmUp(baseURL: String) async {
+        guard let url = URL(string: baseURL) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+        _ = try? await session.data(for: request)
+        logger.info("LLM connection pre-warmed to \(baseURL)")
+    }
+
+    func invalidate() async {
+        session.invalidateAndCancel()
+    }
+
+    /// Process text through Doubao ARK API (OpenAI-compatible streaming).
+    /// Returns the full LLM response as a single string.
+    func process(
+        text: String,
+        prompt: String,
+        config: LLMConfig,
+        inputBoundary: LLMInputBoundary
+    ) async throws -> String {
+        try await process(
+            text: text,
+            prompt: prompt,
+            config: config,
+            inputBoundary: inputBoundary,
+            invocationContext: nil
+        )
+    }
+
+    func process(
+        text: String,
+        prompt: String,
+        config: LLMConfig,
+        inputBoundary: LLMInputBoundary,
+        invocationContext: LLMInvocationContext?
+    ) async throws -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return text }
+        let preparedPrompt = LLMPreparedPrompt.make(
+            text: trimmedText,
+            prompt: prompt,
+            inputBoundary: inputBoundary
+        )
+
+        guard let url = URL(string: "\(config.baseURL)/chat/completions") else {
+            throw LLMError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if provider == .magpie {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+            request.setValue("Type4Me/\(version)", forHTTPHeaderField: "User-Agent")
+        }
+        request.timeoutInterval = 30
+
+        let disableThinking = LLMThinkingPreference.isDisabled(for: provider)
+        let disableField = disableThinking ? provider.thinkingDisableField(for: config.model) : nil
+        var reasoningEffort: String? = disableField == .reasoningEffort ? "none" : config.reasoningEffort
+        if disableField == .lowestReasoningEffort, let base = URL(string: config.baseURL) {
+            reasoningEffort = await MagpieModelCatalog.shared.lowestReasoningEffort(model: config.model, baseURL: base)
+        }
+        let body = ChatRequest(
+            model: config.model,
+            messages: chatMessages(for: preparedPrompt),
+            stream: true,
+            stream_options: StreamOptions(include_usage: true),
+            thinking: disableField == .thinking ? ThinkingConfig(type: "disabled") : nil,
+            enable_thinking: disableField == .enableThinking ? false : nil,
+            reasoning: disableField == .reasoning ? ReasoningConfig(effort: "none") : nil,
+            reasoning_effort: reasoningEffort,
+            think: disableField == .think ? false : nil,
+            reasoning_split: provider.needsReasoningSplit ? true : nil
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        logger.info("LLM request: \(text.count) chars, endpoint=\(config.model), stream=true")
+        let result = try await streamChat(request: request, model: config.model, sourceText: text, invocationContext: invocationContext)
+
+        logger.info("LLM result: \(result.count) chars")
+        return result.strippingThinkTags()
+    }
+
+    func processStreaming(
+        text: String,
+        prompt: String,
+        config: LLMConfig,
+        inputBoundary: LLMInputBoundary,
+        onDelta: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        try await processStreaming(
+            text: text,
+            prompt: prompt,
+            config: config,
+            inputBoundary: inputBoundary,
+            invocationContext: nil,
+            onDelta: onDelta
+        )
+    }
+
+    func processStreaming(
+        text: String,
+        prompt: String,
+        config: LLMConfig,
+        inputBoundary: LLMInputBoundary,
+        invocationContext: LLMInvocationContext?,
+        onDelta: @escaping @Sendable (String) async -> Void
+    ) async throws -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return text }
+        let preparedPrompt = LLMPreparedPrompt.make(
+            text: trimmedText,
+            prompt: prompt,
+            inputBoundary: inputBoundary
+        )
+
+        guard let url = URL(string: "\(config.baseURL)/chat/completions") else {
+            throw LLMError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if provider == .magpie {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+            request.setValue("Type4Me/\(version)", forHTTPHeaderField: "User-Agent")
+        }
+        request.timeoutInterval = 30
+
+        let disableThinking = LLMThinkingPreference.isDisabled(for: provider)
+        let disableField = disableThinking ? provider.thinkingDisableField(for: config.model) : nil
+        var reasoningEffort: String? = disableField == .reasoningEffort ? "none" : config.reasoningEffort
+        if disableField == .lowestReasoningEffort, let base = URL(string: config.baseURL) {
+            reasoningEffort = await MagpieModelCatalog.shared.lowestReasoningEffort(model: config.model, baseURL: base)
+        }
+        let body = ChatRequest(
+            model: config.model,
+            messages: chatMessages(for: preparedPrompt),
+            stream: true,
+            stream_options: StreamOptions(include_usage: true),
+            thinking: disableField == .thinking ? ThinkingConfig(type: "disabled") : nil,
+            enable_thinking: disableField == .enableThinking ? false : nil,
+            reasoning: disableField == .reasoning ? ReasoningConfig(effort: "none") : nil,
+            reasoning_effort: reasoningEffort,
+            think: disableField == .think ? false : nil,
+            reasoning_split: provider.needsReasoningSplit ? true : nil
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+
+        logger.info("LLM streaming request: \(text.count) chars, endpoint=\(config.model)")
+        let result = try await streamChat(request: request, model: config.model, sourceText: text, invocationContext: invocationContext, onDelta: onDelta)
+        return result.strippingThinkTags()
+    }
+
+    private func chatMessages(for prompt: LLMPreparedPrompt) -> [ChatMessage] {
+        var messages: [ChatMessage] = []
+        if let system = prompt.system {
+            messages.append(ChatMessage(role: "system", content: system))
+        }
+        messages.append(ChatMessage(role: "user", content: prompt.user))
+        return messages
+    }
+
+    // MARK: - Streaming (SSE)
+    private func streamChat(
+        request: URLRequest,
+        model: String,
+        sourceText: String,
+        invocationContext: LLMInvocationContext? = nil,
+        onDelta: (@Sendable (String) async -> Void)? = nil
+    ) async throws -> String {
+        let requestStart = ContinuousClock.now
+        DebugFileLogger.log("llm: request started model=\(model)")
+
+        var recordedOutcome = false
+        func recordOutcome(status: String, completionText: String, metrics: LLMExecutionMetrics?) {
+            guard !recordedOutcome else { return }
+            recordedOutcome = true
+            let durationSec = Double((ContinuousClock.now - requestStart).components.seconds) +
+                              Double((ContinuousClock.now - requestStart).components.attoseconds) / 1e18
+            LLMUsageRecorder.record(
+                featureSource: invocationContext?.featureSource ?? .dictationPolish,
+                provider: provider.rawValue,
+                model: model,
+                promptText: sourceText,
+                completionText: completionText,
+                durationSeconds: durationSec,
+                metrics: metrics,
+                status: status,
+                modeName: invocationContext?.modeName
+            )
+        }
+
+        let (bytes, response): (URLSession.AsyncBytes, URLResponse)
+        do {
+            (bytes, response) = try await session.bytes(for: request)
+        } catch {
+            recordOutcome(status: "error", completionText: "", metrics: nil)
+            if provider == .magpie, let urlError = error as? URLError {
+                switch urlError.code {
+                case .cannotConnectToHost, .networkConnectionLost, .timedOut:
+                    throw LLMError.magpieUnavailable
+                default:
+                    break
+                }
+            }
+            throw error
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            recordOutcome(status: "error", completionText: "", metrics: nil)
+            throw LLMError.requestFailed(0)
+        }
+        guard http.statusCode == 200 else {
+            recordOutcome(status: "error", completionText: "", metrics: nil)
+            logger.error("LLM HTTP \(http.statusCode)")
+            DebugFileLogger.log("LLM[\(model)]: HTTP \(http.statusCode)")
+            if provider == .magpie, http.statusCode == 401 || http.statusCode == 403 {
+                throw LLMError.magpieRejected(http.statusCode)
+            }
+            // Gateways often reject unsupported fields (e.g. reasoning_effort) with a body naming
+            // the culprit; surface it. Custom 401 keeps the generic API Key hint.
+            if provider == .magpie || (provider == .custom && http.statusCode != 401) {
+                var errBody = ""
+                for try await line in bytes.lines {
+                    errBody += line
+                    if errBody.count > 1024 { break }
+                }
+                if let detail = Self.serverErrorDetail(from: errBody) {
+                    DebugFileLogger.log("LLM[\(model)]: server error: \(detail)")
+                    throw LLMError.requestFailedWithDetail(http.statusCode, detail)
+                }
+            }
+            throw LLMError.requestFailed(http.statusCode)
+        }
+
+        var result = ""
+        var lineCount = 0
+        var loggedFirstEvent = false
+        var loggedFirstToken = false
+        var promptTokens: Int?
+        var completionTokens: Int?
+        var receivedDone = false
+        do {
+            for try await line in bytes.lines {
+                lineCount += 1
+                guard line.hasPrefix("data: ") else { continue }
+                if !loggedFirstEvent {
+                    loggedFirstEvent = true
+                    DebugFileLogger.log("llm: first SSE event +\(ContinuousClock.now - requestStart) model=\(model)")
+                }
+                let payload = String(line.dropFirst(6))
+                if payload == "[DONE]" {
+                    receivedDone = true
+                    break
+                }
+                guard let data = payload.data(using: .utf8) else { continue }
+
+                if let chunk = try? JSONDecoder().decode(ChatStreamChunk.self, from: data) {
+                    if let usage = chunk.usage {
+                        promptTokens = usage.prompt_tokens
+                        completionTokens = usage.completion_tokens
+                    }
+                    if let content = chunk.choices.first?.delta.content {
+                        if !loggedFirstToken, !content.isEmpty {
+                            loggedFirstToken = true
+                            DebugFileLogger.log("llm: first content token +\(ContinuousClock.now - requestStart) model=\(model)")
+                        }
+                        result += content
+                        if !content.isEmpty {
+                            await onDelta?(content)
+                        }
+                    }
+                }
+            }
+            guard receivedDone else {
+                DebugFileLogger.log("LLM[\(model)]: stream closed without [DONE] marker (lines=\(lineCount), chars=\(result.count))")
+                throw LLMError.streamIncomplete(L("未收到结束标记 [DONE]", "missing [DONE] terminal marker"))
+            }
+            if result.isEmpty && lineCount > 0 {
+                DebugFileLogger.log("LLM[\(model)]: \(lineCount) lines but 0 content chars")
+                throw LLMError.emptyResponse(L("流式响应没有文本", "stream contained no text"))
+            }
+            if result.isEmpty {
+                DebugFileLogger.log("LLM[\(model)]: 0 lines received (connection closed immediately)")
+                throw LLMError.emptyResponse(nil)
+            }
+        } catch {
+            let durationSec = Double((ContinuousClock.now - requestStart).components.seconds) +
+                              Double((ContinuousClock.now - requestStart).components.attoseconds) / 1e18
+            let metrics = LLMExecutionMetrics(
+                promptTokens: promptTokens,
+                completionTokens: completionTokens,
+                durationSeconds: durationSec,
+                isEstimated: promptTokens == nil || completionTokens == nil
+            )
+            recordOutcome(status: "error", completionText: result, metrics: metrics)
+            throw error
+        }
+
+        let durationSec = Double((ContinuousClock.now - requestStart).components.seconds) +
+                          Double((ContinuousClock.now - requestStart).components.attoseconds) / 1e18
+        DebugFileLogger.log("llm: completed +\(ContinuousClock.now - requestStart) chars=\(result.count) model=\(model) promptTokens=\(promptTokens ?? -1) compTokens=\(completionTokens ?? -1)")
+
+        let metrics = LLMExecutionMetrics(
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            durationSeconds: durationSec,
+            isEstimated: promptTokens == nil || completionTokens == nil
+        )
+        recordOutcome(status: "success", completionText: result, metrics: metrics)
+
+        return result
+    }
+
+    /// Extracts a short single-line message from an OpenAI-style error body
+    /// (`{"error":{"message":…}}`, `{"error":"…"}`, or `{"message":…}`).
+    static func serverErrorDetail(from body: String, maxLength: Int = 200) -> String? {
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = ((json["error"] as? [String: Any])?["message"] as? String)
+                ?? (json["error"] as? String)
+                ?? (json["message"] as? String)
+        else { return nil }
+        let message = raw.split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard !message.isEmpty else { return nil }
+        return message.count > maxLength ? String(message.prefix(maxLength)) + "…" : message
+    }
+
+    // MARK: - Non-streaming (single JSON response)
+
+    private func processNonStreaming(request: URLRequest, model: String) async throws -> String {
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw LLMError.requestFailed(0)
+        }
+        guard http.statusCode == 200 else {
+            logger.error("LLM HTTP \(http.statusCode)")
+            DebugFileLogger.log("LLM[\(model)]: HTTP \(http.statusCode)")
+            throw LLMError.requestFailed(http.statusCode)
+        }
+
+        guard let json = try? JSONDecoder().decode(ChatCompletionResponse.self, from: data),
+              let content = json.choices.first?.message.content, !content.isEmpty
+        else {
+            DebugFileLogger.log("LLM[\(model)]: non-streaming empty response")
+            throw LLMError.emptyResponse(L("响应正文为空", "empty response body"))
+        }
+        return content
+    }
+}
+
+// MARK: - Request/Response Types
+
+struct ThinkingConfig: Encodable, Sendable {
+    let type: String
+}
+
+struct ReasoningConfig: Encodable, Sendable {
+    let effort: String
+}
+
+struct ChatRequest: Encodable, Sendable {
+    let model: String
+    let messages: [ChatMessage]
+    let stream: Bool
+    let stream_options: StreamOptions?
+    let thinking: ThinkingConfig?
+    let enable_thinking: Bool?
+    let reasoning: ReasoningConfig?
+    let reasoning_effort: String?
+    let think: Bool?
+    let reasoning_split: Bool?
+
+    init(
+        model: String,
+        messages: [ChatMessage],
+        stream: Bool,
+        stream_options: StreamOptions? = nil,
+        thinking: ThinkingConfig? = nil,
+        enable_thinking: Bool? = nil,
+        reasoning: ReasoningConfig? = nil,
+        reasoning_effort: String? = nil,
+        think: Bool? = nil,
+        reasoning_split: Bool? = nil
+    ) {
+        self.model = model
+        self.messages = messages
+        self.stream = stream
+        self.stream_options = stream_options
+        self.thinking = thinking
+        self.enable_thinking = enable_thinking
+        self.reasoning = reasoning
+        self.reasoning_effort = reasoning_effort
+        self.think = think
+        self.reasoning_split = reasoning_split
+    }
+}
+
+struct StreamOptions: Encodable, Sendable {
+    let include_usage: Bool
+}
+
+struct ChatMessage: Codable, Sendable, Equatable {
+    let role: String
+    let content: String
+}
+
+// Non-streaming response
+struct ChatCompletionResponse: Decodable, Sendable {
+    let choices: [CompletionChoice]
+}
+
+struct CompletionChoice: Decodable, Sendable {
+    let message: CompletionMessage
+}
+
+struct CompletionMessage: Decodable, Sendable {
+    let content: String?
+}
+
+// Streaming response (SSE chunks)
+struct ChatStreamChunk: Decodable, Sendable {
+    let choices: [ChunkChoice]
+    let usage: ChunkUsage?
+}
+
+struct ChunkUsage: Decodable, Sendable {
+    let prompt_tokens: Int?
+    let completion_tokens: Int?
+    let total_tokens: Int?
+}
+struct ChunkChoice: Decodable, Sendable {
+    let delta: ChunkDelta
+}
+
+struct ChunkDelta: Decodable, Sendable {
+    let content: String?
+}
+
+enum LLMError: Error, LocalizedError {
+    case invalidURL
+    case requestFailed(Int)
+    case requestFailedWithDetail(Int, String)
+    case emptyResponse(String?)
+    case streamIncomplete(String?)
+    case magpieUnavailable
+    case magpieRejected(Int)
+    case magpieModelMissing
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return L("LLM 地址无效", "Invalid LLM URL")
+        case .requestFailed(let code):
+            switch code {
+            case 401: return L("LLM 鉴权失败，请检查 API Key", "LLM auth failed, check API Key")
+            case 429: return L("LLM 请求超限或余额不足", "LLM rate limit or insufficient balance")
+            case 500, 502, 503: return L("LLM 服务异常 (\(code))", "LLM service error (\(code))")
+            default:  return L("LLM 请求失败 (\(code))", "LLM request failed (\(code))")
+            }
+        case .requestFailedWithDetail(let code, let detail):
+            return L("LLM 请求失败 (\(code)): \(detail)", "LLM request failed (\(code)): \(detail)")
+        case .magpieUnavailable:
+            return L("Magpie 未运行，请打开 Magpie", "Magpie isn't running. Open Magpie and try again.")
+        case .magpieRejected:
+            return L("Magpie 拒绝了请求，请在 Magpie 中检查 Type4Me 的接入", "Magpie refused the request. Check Type4Me's connection in Magpie.")
+        case .magpieModelMissing:
+            return L("请先在 Type4Me 中为 Magpie 选择模型", "Pick a Magpie model in Type4Me first")
+        case .emptyResponse(let raw):
+            if let raw {
+                return L("LLM 未返回内容: \(raw)", "LLM returned no content: \(raw)")
+            }
+            return L("LLM 未返回内容", "LLM returned no content")
+        case .streamIncomplete(let detail):
+            if let detail {
+                return L("流式连接中断: \(detail)", "Stream connection interrupted: \(detail)")
+            }
+            return L("流式连接异常中断", "Stream connection interrupted prematurely")
+        }
+    }
+}

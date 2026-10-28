@@ -1,0 +1,936 @@
+[
+  {
+    "id": "ctx_01",
+    "text": "o3比o1强不少但API价格也贵了三倍",
+    "targets": [
+      "o3",
+      "o1"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "O3比 O1强不少，但 API 价格也贵了3倍。",
+        "score": {
+          "o3": true,
+          "o1": true
+        },
+        "time": 2.4
+      }
+    }
+  },
+  {
+    "id": "ctx_02",
+    "text": "预算有限就用o4-mini，性价比比o3-mini高",
+    "targets": [
+      "o4-mini",
+      "o3-mini"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "预算有限就用 O 4 Mini，性价比比 O 3 Mini 高。",
+        "score": {
+          "o4-mini": true,
+          "o3-mini": true
+        },
+        "time": 2.71
+      }
+    }
+  },
+  {
+    "id": "ctx_03",
+    "text": "我最近都在vibe coding，用Lovable搭了个网站",
+    "targets": [
+      "vibe coding",
+      "Lovable"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "我最近都在 Vibe Coding 用 Lovable 搭了个网站。",
+        "score": {
+          "vibe coding": true,
+          "Lovable": true
+        },
+        "time": 2.14
+      }
+    }
+  },
+  {
+    "id": "ctx_04",
+    "text": "Bolt.new和v0哪个生成前端代码更靠谱",
+    "targets": [
+      "Bolt.new",
+      "v0"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "BOTNEW 和 V 零哪个生成前端代码更靠谱？",
+        "score": {
+          "Bolt.new": false,
+          "v0": false
+        },
+        "time": 2.42
+      }
+    }
+  },
+  {
+    "id": "ctx_05",
+    "text": "Anthropic的Claude Code是目前最好的coding agent",
+    "targets": [
+      "Anthropic",
+      "Claude Code"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Anthropic 的 Claude Code 是目前最好的 Coding Agent。",
+        "score": {
+          "Anthropic": true,
+          "Claude Code": true
+        },
+        "time": 2.29
+      }
+    }
+  },
+  {
+    "id": "ctx_06",
+    "text": "DeepSeek R1的推理能力确实强，开源社区都在用",
+    "targets": [
+      "DeepSeek R1"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "deepseek 21的推理能力确实强，开源社区都在用。",
+        "score": {
+          "DeepSeek R1": false
+        },
+        "time": 2.59,
+        "corrected": "DeepSeek 21的推理能力确实强，开源社区都在用。",
+        "score_corrected": {
+          "DeepSeek R1": false
+        }
+      }
+    }
+  },
+  {
+    "id": "ctx_07",
+    "text": "Gemini 3和Llama 4在多模态上打得很激烈",
+    "targets": [
+      "Gemini 3",
+      "Llama 4"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "gemini 3和 llama 4在多模态上打得很激烈。",
+        "score": {
+          "Gemini 3": true,
+          "Llama 4": true
+        },
+        "time": 2.76
+      }
+    }
+  },
+  {
+    "id": "ctx_08",
+    "text": "Kimi K2的上下文窗口到了一百万token",
+    "targets": [
+      "Kimi K2"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Kimi K 二的上下文窗口到了100万 token。",
+        "score": {
+          "Kimi K2": false
+        },
+        "time": 2.24
+      }
+    }
+  },
+  {
+    "id": "ctx_09",
+    "text": "Mixtral用的MoE架构所以推理速度快",
+    "targets": [
+      "Mixtral",
+      "MoE"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Mixtral 用的 MoE 架构，所以推理速度快。",
+        "score": {
+          "Mixtral": true,
+          "MoE": true
+        },
+        "time": 1.82
+      }
+    }
+  },
+  {
+    "id": "ctx_10",
+    "text": "Mistral最近发布了新版本，Grok 4也跟着出了",
+    "targets": [
+      "Mistral",
+      "Grok 4"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Mistral 最近发布了新版本，Grok 4也跟着出了。",
+        "score": {
+          "Mistral": true,
+          "Grok 4": true
+        },
+        "time": 2.43
+      }
+    }
+  },
+  {
+    "id": "ctx_11",
+    "text": "Kimi和智谱在中文理解上比国外模型好不少",
+    "targets": [
+      "Kimi",
+      "智谱"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Kimi 和智谱在中文理解上比国外模型好不少。",
+        "score": {
+          "Kimi": true,
+          "智谱": true
+        },
+        "time": 2.03
+      }
+    }
+  },
+  {
+    "id": "ctx_12",
+    "text": "月之暗面做的是Kimi，智谱做的是GLM",
+    "targets": [
+      "月之暗面",
+      "GLM"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "月之暗恋做的是 Kimi 质朴做的是 GLM。",
+        "score": {
+          "月之暗面": false,
+          "GLM": true
+        },
+        "time": 2.15
+      }
+    }
+  },
+  {
+    "id": "ctx_13",
+    "text": "豆包和阶跃星辰算是国内第二梯队的代表",
+    "targets": [
+      "豆包",
+      "阶跃星辰"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "豆包和街月星辰算是国内第二梯队的代表。",
+        "score": {
+          "豆包": true,
+          "阶跃星辰": false
+        },
+        "time": 1.94
+      }
+    }
+  },
+  {
+    "id": "ctx_14",
+    "text": "用LangGraph搭multi-agent工作流比直接写省事多了",
+    "targets": [
+      "LangGraph",
+      "multi-agent"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "用 Langchain 搭多 Agent 的工作流比直接写省事多了。",
+        "score": {
+          "LangGraph": false,
+          "multi-agent": false
+        },
+        "time": 2.27
+      }
+    }
+  },
+  {
+    "id": "ctx_15",
+    "text": "Cursor的母公司Anysphere估值已经过百亿了",
+    "targets": [
+      "Cursor",
+      "Anysphere"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Curse 的母公司 AnySpire 估值已经过百亿了。",
+        "score": {
+          "Cursor": false,
+          "Anysphere": false
+        },
+        "time": 2.03
+      }
+    }
+  },
+  {
+    "id": "ctx_16",
+    "text": "Windsurf配合Cline来写代码效率提升很大",
+    "targets": [
+      "Windsurf",
+      "Cline"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "VS Code 配合 Clang 来写代码效率提升很大。",
+        "score": {
+          "Windsurf": false,
+          "Cline": false
+        },
+        "time": 1.96
+      }
+    }
+  },
+  {
+    "id": "ctx_17",
+    "text": "Cognition做的Devin是第一个AI软件工程师",
+    "targets": [
+      "Cognition",
+      "Devin"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Cognition 做的 Devin 是第一个 AI 软件工程师。",
+        "score": {
+          "Cognition": true,
+          "Devin": true
+        },
+        "time": 2.23
+      }
+    }
+  },
+  {
+    "id": "ctx_18",
+    "text": "ElevenLabs的语音合成效果是目前最自然的",
+    "targets": [
+      "ElevenLabs"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Eleven Labs 的语音合成效果是目前最自然的。",
+        "score": {
+          "ElevenLabs": true
+        },
+        "time": 2.24
+      }
+    }
+  },
+  {
+    "id": "ctx_19",
+    "text": "Dify和Coze都能低代码搭AI应用，但设计理念不一样",
+    "targets": [
+      "Dify",
+      "Coze"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Befy 和 Cos 都能低代码搭 AI 应用，但设计理念不一样。",
+        "score": {
+          "Dify": false,
+          "Coze": false
+        },
+        "time": 2.56
+      }
+    }
+  },
+  {
+    "id": "ctx_20",
+    "text": "用tiktoken算一下会不会超context window的限制",
+    "targets": [
+      "tiktoken",
+      "context window"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "用 TikTok 算一下会不会超 Context Window 的限制。",
+        "score": {
+          "tiktoken": false,
+          "context window": true
+        },
+        "time": 2.14
+      }
+    }
+  },
+  {
+    "id": "ctx_21",
+    "text": "chain of thought能显著提升LLM的推理表现",
+    "targets": [
+      "chain of thought",
+      "LLM"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Chain of Thought 能显著提升 LM 的推理表现。",
+        "score": {
+          "chain of thought": true,
+          "LLM": false
+        },
+        "time": 2.29
+      }
+    }
+  },
+  {
+    "id": "ctx_22",
+    "text": "A2A协议和MCP协议是AI agent互通的两大标准",
+    "targets": [
+      "A2A",
+      "MCP"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "AIA 协议和 MCP 协议是 AI Agent 互通的两大标准。",
+        "score": {
+          "A2A": false,
+          "MCP": true
+        },
+        "time": 2.89
+      }
+    }
+  },
+  {
+    "id": "ctx_23",
+    "text": "用LoRA做fine-tuning只需要很少的数据就够了",
+    "targets": [
+      "LoRA",
+      "fine-tuning"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "用 Laura 做 fine-tuning 只需要很少的数据就够了。",
+        "score": {
+          "LoRA": false,
+          "fine-tuning": true
+        },
+        "time": 2.03
+      }
+    }
+  },
+  {
+    "id": "ctx_24",
+    "text": "现在很多模型用DPO替代RLHF来做对齐训练",
+    "targets": [
+      "DPO",
+      "RLHF"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "现在很多模型用 DPO 替代 RLHF 来做对齐训练。",
+        "score": {
+          "DPO": true,
+          "RLHF": true
+        },
+        "time": 2.69
+      }
+    }
+  },
+  {
+    "id": "ctx_25",
+    "text": "做RAG的话向量数据库推荐用Pinecone或者Qdrant",
+    "targets": [
+      "RAG",
+      "Pinecone",
+      "Qdrant"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "做 RAG 的话，向量数据库推荐用 Pinecone 或者 Qdrant。",
+        "score": {
+          "RAG": true,
+          "Pinecone": true,
+          "Qdrant": true
+        },
+        "time": 2.62
+      }
+    }
+  },
+  {
+    "id": "ctx_26",
+    "text": "NVIDIA的Blackwell架构比H100性能强好几倍",
+    "targets": [
+      "Blackwell",
+      "H100",
+      "NVIDIA"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Nvidia 的 Blackwell 架构比 H100性能强好几倍。",
+        "score": {
+          "Blackwell": true,
+          "H100": true,
+          "NVIDIA": true
+        },
+        "time": 2.64
+      }
+    }
+  },
+  {
+    "id": "ctx_27",
+    "text": "FLUX出图质量已经超过Midjourney了",
+    "targets": [
+      "FLUX",
+      "Midjourney"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Flux 出图质量已经超过 Midjourney 了。",
+        "score": {
+          "FLUX": true,
+          "Midjourney": true
+        },
+        "time": 1.88
+      }
+    }
+  },
+  {
+    "id": "ctx_28",
+    "text": "Veo 3的视频生成效果和Sora 2各有千秋",
+    "targets": [
+      "Veo 3",
+      "Sora 2"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Vivo 3的视频生成效果和 Sora 2各有千秋。",
+        "score": {
+          "Veo 3": false,
+          "Sora 2": true
+        },
+        "time": 2.53
+      }
+    }
+  },
+  {
+    "id": "ctx_29",
+    "text": "Hugging Face上开源模型越来越多，用Ollama本地跑很方便",
+    "targets": [
+      "Hugging Face",
+      "Ollama"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "Hugging Face 上开源模型越来越多，用 llama 本地跑很方便。",
+        "score": {
+          "Hugging Face": true,
+          "Ollama": false
+        },
+        "time": 2.84
+      }
+    }
+  },
+  {
+    "id": "ctx_30",
+    "text": "前端部署到Vercel，后端用Supabase，省事很多",
+    "targets": [
+      "Vercel",
+      "Supabase"
+    ],
+    "ctx": true,
+    "engines": {
+      "Volcengine": {
+        "raw": "前端部署到 Vercel，后端用 Superbase 省事很多。",
+        "score": {
+          "Vercel": true,
+          "Supabase": false
+        },
+        "time": 2.37,
+        "corrected": "前端部署到 Vercel，后端用 Supabase 省事很多。",
+        "score_corrected": {
+          "Vercel": true,
+          "Supabase": true
+        }
+      }
+    }
+  },
+  {
+    "id": "bare_01",
+    "text": "帮我查一下o3怎么收费的",
+    "targets": [
+      "o3"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "帮我查一下 O 3怎么收费的。",
+        "score": {
+          "o3": true
+        },
+        "time": 1.63
+      }
+    }
+  },
+  {
+    "id": "bare_02",
+    "text": "o4-mini和o3-mini有什么区别",
+    "targets": [
+      "o4-mini",
+      "o3-mini"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "O4 Mini 和 O3 Mini 有什么区别？",
+        "score": {
+          "o4-mini": true,
+          "o3-mini": true
+        },
+        "time": 2.35
+      }
+    }
+  },
+  {
+    "id": "bare_03",
+    "text": "今天试了一下vibe coding还挺有意思",
+    "targets": [
+      "vibe coding"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "今天试了一下 Vibe coding，还挺有意思。",
+        "score": {
+          "vibe coding": true
+        },
+        "time": 1.72
+      }
+    }
+  },
+  {
+    "id": "bare_04",
+    "text": "我朋友推荐了一个叫Lovable的东西",
+    "targets": [
+      "Lovable"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "我朋友推荐了一个叫 Lovable 的东西。",
+        "score": {
+          "Lovable": true
+        },
+        "time": 1.78
+      }
+    }
+  },
+  {
+    "id": "bare_05",
+    "text": "帮我看看Bolt.new上面那个模板",
+    "targets": [
+      "Bolt.new"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "帮我看看 boot new 上面那个模板。",
+        "score": {
+          "Bolt.new": false
+        },
+        "time": 1.94
+      }
+    }
+  },
+  {
+    "id": "bare_06",
+    "text": "你知道Anthropic吗就是做Claude的那家",
+    "targets": [
+      "Anthropic",
+      "Claude"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "你知道 Anthropic 吗？就是做 claude 的那家。",
+        "score": {
+          "Anthropic": true,
+          "Claude": true
+        },
+        "time": 1.91
+      }
+    }
+  },
+  {
+    "id": "bare_07",
+    "text": "DeepSeek R1可以本地跑吗",
+    "targets": [
+      "DeepSeek R1"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "deepseek 21可以本地跑吗？",
+        "score": {
+          "DeepSeek R1": false
+        },
+        "time": 1.77,
+        "corrected": "DeepSeek 21可以本地跑吗？",
+        "score_corrected": {
+          "DeepSeek R1": false
+        }
+      }
+    }
+  },
+  {
+    "id": "bare_08",
+    "text": "Kimi可以免费用吗",
+    "targets": [
+      "Kimi"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "Kimi 可以免费用吗？",
+        "score": {
+          "Kimi": true
+        },
+        "time": 1.35
+      }
+    }
+  },
+  {
+    "id": "bare_09",
+    "text": "那个Mixtral模型支持中文吗",
+    "targets": [
+      "Mixtral"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "那个 Mixtral 模型支持中文吗？",
+        "score": {
+          "Mixtral": true
+        },
+        "time": 1.57
+      }
+    }
+  },
+  {
+    "id": "bare_10",
+    "text": "那个叫LangGraph的框架要怎么安装",
+    "targets": [
+      "LangGraph"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "那个叫 Langraph 的框架要怎么安装？",
+        "score": {
+          "LangGraph": false
+        },
+        "time": 1.7
+      }
+    }
+  },
+  {
+    "id": "bare_11",
+    "text": "我在Cursor里面装了Cline这个插件",
+    "targets": [
+      "Cursor",
+      "Cline"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "我在 Cursor 里面装了 Klein 这个插件。",
+        "score": {
+          "Cursor": true,
+          "Cline": false
+        },
+        "time": 1.63,
+        "corrected": "我在 Cursor 里面装了 Cline 这个插件。",
+        "score_corrected": {
+          "Cursor": true,
+          "Cline": true
+        }
+      }
+    }
+  },
+  {
+    "id": "bare_12",
+    "text": "有人用过ElevenLabs吗效果怎么样",
+    "targets": [
+      "ElevenLabs"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "有人用过 ELEVEN LABS 吗？效果怎么样？",
+        "score": {
+          "ElevenLabs": true
+        },
+        "time": 1.93
+      }
+    }
+  },
+  {
+    "id": "bare_13",
+    "text": "帮我在Dify上面配一个工作流",
+    "targets": [
+      "Dify"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "帮我在 DataFeast 上面配一个工作流。",
+        "score": {
+          "Dify": false
+        },
+        "time": 1.7
+      }
+    }
+  },
+  {
+    "id": "bare_14",
+    "text": "你听说过A2A协议吗",
+    "targets": [
+      "A2A"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "你听说过 ARA 协议吗？",
+        "score": {
+          "A2A": false
+        },
+        "time": 1.21
+      }
+    }
+  },
+  {
+    "id": "bare_15",
+    "text": "tiktoken这个库怎么装",
+    "targets": [
+      "tiktoken"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "tiktok 这个库怎么装？",
+        "score": {
+          "tiktoken": false
+        },
+        "time": 1.49
+      }
+    }
+  },
+  {
+    "id": "bare_16",
+    "text": "我想买一张Blackwell架构的显卡",
+    "targets": [
+      "Blackwell"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "我想买一张 Blackwell 架构的显卡。",
+        "score": {
+          "Blackwell": true
+        },
+        "time": 1.65
+      }
+    }
+  },
+  {
+    "id": "bare_17",
+    "text": "FLUX和Midjourney到底哪个好用",
+    "targets": [
+      "FLUX",
+      "Midjourney"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "Flux 和 Midjourney 到底哪个好用？",
+        "score": {
+          "FLUX": true,
+          "Midjourney": true
+        },
+        "time": 1.85
+      }
+    }
+  },
+  {
+    "id": "bare_18",
+    "text": "智谱是哪家公司做的",
+    "targets": [
+      "智谱"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "智谱是哪家公司做的？",
+        "score": {
+          "智谱": true
+        },
+        "time": 1.16
+      }
+    }
+  },
+  {
+    "id": "bare_19",
+    "text": "阶跃星辰最近有什么新模型出来",
+    "targets": [
+      "阶跃星辰"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "街月星辰最近有什么新模型出来？",
+        "score": {
+          "阶跃星辰": false
+        },
+        "time": 1.74
+      }
+    }
+  },
+  {
+    "id": "bare_20",
+    "text": "Devin好像很贵要五百美金一个月",
+    "targets": [
+      "Devin"
+    ],
+    "ctx": false,
+    "engines": {
+      "Volcengine": {
+        "raw": "好像很贵，要500美金一个月。",
+        "score": {
+          "Devin": false
+        },
+        "time": 1.78
+      }
+    }
+  }
+]

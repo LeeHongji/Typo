@@ -1,0 +1,254 @@
+import SwiftUI
+
+struct AboutTab: View {
+
+    var showsHeader = true
+
+    @Environment(AppState.self) private var appState
+    @Environment(AppUpdater.self) private var appUpdater
+    @State private var showIssueReporter = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showsHeader {
+                SettingsSectionHeader(
+                    label: L("关于", "ABOUT"),
+                    title: L("关于 Type4Me", "About Type4Me"),
+                    description: L("语音，流畅输入。基于火山引擎大模型语音识别的 macOS 原生输入工具。", "Voice to text, seamlessly. A native macOS input tool powered by large-model ASR.")
+                )
+            }
+
+            Spacer().frame(height: 8)
+
+            // App info rows
+            SettingsRow(label: L("版本", "Version"), value: AppBuildInfo.current.version)
+            SettingsDivider()
+            SettingsRow(label: L("构建", "Build"), value: AppBuildInfo.current.buildNumber)
+            SettingsDivider()
+            SettingsRow(label: L("平台", "Platform"), value: "macOS 14+")
+            SettingsDivider()
+            SettingsRow(label: L("许可证", "License"), value: "MIT")
+
+            Spacer().frame(height: 24)
+
+            // Update check
+            updateSection
+
+            Spacer().frame(height: 24)
+
+            // Links
+            HStack(spacing: 12) {
+                linkButton("GitHub", icon: "chevron.left.forwardslash.chevron.right") {
+                    if let url = URL(string: "https://github.com/joewongjc/type4me") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                linkButton(L("反馈", "Feedback"), icon: "envelope") {
+                    showIssueReporter = true
+                }
+            }
+
+            Spacer()
+
+            // Footer
+            Text(L("用爱和 Claude Code 打造", "Made with ♥ and Claude Code"))
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsTextTertiary)
+        }
+        .sheet(isPresented: $showIssueReporter) {
+            IssueReportSheet()
+        }
+    }
+
+    // MARK: - Update Section
+
+    @ViewBuilder
+    private var updateSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(L("软件更新", "Software Update"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(TF.settingsText)
+
+                Spacer()
+
+                if appState.isCheckingUpdate {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button {
+                        Task {
+                            await UpdateChecker.shared.checkNow(appState: appState)
+                        }
+                    } label: {
+                        Text(L("检查更新", "Check for Updates"))
+                    }
+                    // Yield the ink role to the download/install action once an update exists.
+                    .buttonStyle(.tf(appState.availableUpdates.isEmpty ? .primary : .secondary, size: .small))
+                }
+            }
+
+            if appState.availableUpdates.isEmpty && !appState.isCheckingUpdate {
+                if appState.lastUpdateCheck != nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.system(size: 12))
+                        Text(L("已是最新版本", "You're up to date"))
+                            .font(.system(size: 12))
+                            .foregroundStyle(TF.settingsTextSecondary)
+                    }
+                }
+            } else if !appState.availableUpdates.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(appState.availableUpdates) { update in
+                        updateCard(update)
+                    }
+                }
+
+                // Update action area
+                updateActionArea
+
+                // GitHub link as secondary option
+                Button {
+                    if let url = URL(string: "https://github.com/joewongjc/type4me/releases") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label(L("在 GitHub 上查看", "View on GitHub"), systemImage: "arrow.up.right")
+                }
+                .buttonStyle(.tf(.ghost, size: .small))
+            }
+        }
+    }
+
+    // MARK: - Update Action Area
+
+    @ViewBuilder
+    private var updateActionArea: some View {
+        switch appUpdater.state {
+        case .idle:
+            if let latest = appState.availableUpdates.first {
+                let sizeText = latest.formattedSize(isLocalInstallation: appUpdater.isLocalInstallation)
+                    .map { " (\($0))" } ?? ""
+                let buttonTitle = appUpdater.isLocalInstallation
+                    ? L("下载本地版更新\(sizeText)", "Download Local Update\(sizeText)")
+                    : L("下载更新\(sizeText)", "Download Update\(sizeText)")
+                Button {
+                    appUpdater.downloadUpdate(release: latest)
+                } label: {
+                    Label(buttonTitle, systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.tf(.primary))
+            }
+
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(TF.settingsTextSecondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+
+                Button {
+                    appUpdater.cancelDownload()
+                } label: {
+                    Text(L("取消", "Cancel"))
+                }
+                .buttonStyle(.tf(.ghost, size: .small))
+            }
+
+        case .verifying:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(L("校验中...", "Verifying..."))
+                    .font(.system(size: 12))
+                    .foregroundStyle(TF.settingsTextSecondary)
+            }
+
+        case .readyToInstall:
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    appUpdater.installAndRestart()
+                } label: {
+                    Label(
+                        L("安装并重启", "Install and Restart"),
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                }
+                .buttonStyle(.tf(.primary))
+
+                Text(L("Type4Me 将关闭并自动重启", "Type4Me will close and restart automatically"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+
+        case .installing:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(L("安装中，请勿关闭应用...", "Installing, do not close the app..."))
+                    .font(.system(size: 12))
+                    .foregroundStyle(TF.settingsTextSecondary)
+            }
+
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.system(size: 12))
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(TF.settingsTextSecondary)
+                        .lineLimit(2)
+                }
+
+                Button {
+                    appUpdater.retryDownload()
+                } label: {
+                    Text(L("重试", "Retry"))
+                }
+                .buttonStyle(.tf(.primary, size: .small))
+            }
+        }
+    }
+
+    // MARK: - Update Card
+
+    private func updateCard(_ update: UpdateInfo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("v\(update.version)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(TF.settingsText)
+                Text(update.date)
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+
+            ReleaseNotesMarkupView(markup: update.notes)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8).fill(TF.settingsBg)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(TF.settingsTextTertiary.opacity(0.15), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Helpers
+
+    private func linkButton(_ text: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(text, systemImage: icon)
+        }
+        .buttonStyle(.tf(.secondary))
+    }
+}

@@ -1,0 +1,4517 @@
+import AppKit
+import AVFoundation
+import os
+import Type4MeIntelliSenseCore
+import Type4MeReviseCore
+
+/// Thread-safe flag for the detached sender to signal upload failure.
+private final class UploadFailureFlag: Sendable {
+    private let _value = OSAllocatedUnfairLock(initialState: false)
+    var failed: Bool {
+        get { _value.withLock { $0 } }
+        set { _value.withLock { $0 = newValue } }
+    }
+}
+
+enum TranslationError: LocalizedError, Sendable {
+    case unsupportedTarget(String)
+    case llmUnavailable
+    case emptyOutput
+    case unsafeOutput
+    case unexpectedLanguage(TranslationLanguage)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedTarget(let code):
+            return L("暂不支持目标语言：\(code)", "Unsupported target language: \(code)")
+        case .llmUnavailable:
+            return L("翻译失败，请检查 LLM 设置后重试。", "Translation failed. Check your LLM settings and try again.")
+        case .emptyOutput:
+            return L("翻译模型没有返回有效内容，请重试。", "The translation model returned no usable text. Please try again.")
+        case .unsafeOutput:
+            return L("翻译结果包含异常结构，已停止粘贴。", "The translation contained an unsafe structure and was not pasted.")
+        case .unexpectedLanguage(let target):
+            return L(
+                "翻译结果不是目标语言（\(target.displayName)），已停止粘贴。",
+                "The translation was not in the target language (\(target.displayName)) and was not pasted."
+            )
+        }
+    }
+}
+
+actor RecognitionSession {
+
+    // MARK: - State
+
+    enum SessionState: Equatable, Sendable {
+        case idle
+        case starting
+        case recording
+        case finishing
+        case injecting
+        case postProcessing  // Phase 3
+        case recovering
+    }
+
+    enum RecoveryHotkeyAction: Equatable, Sendable {
+        case notRecovering
+        case prompted
+        case interrupted
+    }
+
+    enum RecordingPurpose: Sendable {
+        case input(ProcessingMode)
+        case revise(RevisePreparedTarget)
+    }
+
+    private(set) var state: SessionState = .idle {
+        didSet {
+            if state == .idle {
+                Task { [historyStore] in
+                    await historyStore.shrinkMemory()
+                }
+            }
+        }
+    }
+
+    var canStartRecording: Bool { state == .idle }
+
+    /// Wait until the session reaches idle state, with a timeout.
+    /// Returns true if idle was reached, false on timeout.
+    func awaitIdle(timeout: Duration = .seconds(3)) async -> Bool {
+        if state == .idle { return true }
+        let deadline = ContinuousClock.now + timeout
+        while state != .idle {
+            let remaining = deadline - ContinuousClock.now
+            guard remaining > .zero else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return state == .idle
+    }
+
+    /// Exposed for testing; production code should use startRecording / stopRecording.
+    func setState(_ newState: SessionState) {
+        state = newState
+    }
+
+    /// A connect error is actionable only while the same session still owns
+    /// the recording lifecycle. Stopping or replacing the session deliberately
+    /// tears down an in-flight connection.
+    static func shouldReportASRConnectFailure(
+        expectedGeneration: UInt64,
+        currentGeneration: UInt64,
+        state: SessionState
+    ) -> Bool {
+        expectedGeneration == currentGeneration && state == .recording
+    }
+
+    /// Exposed for testing; production code should resolve modes through startRecording / switchMode.
+    func currentModeForTesting() -> ProcessingMode {
+        currentMode
+    }
+
+    /// Test seam for request-freezing behavior without starting microphone I/O.
+    func freezeTranslationModeForTesting(_ mode: ProcessingMode) throws {
+        guard mode.id == ProcessingMode.translationModeId else {
+            throw TranslationError.unsupportedTarget("")
+        }
+        let code = mode.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue
+        guard let target = TranslationLanguage(rawValue: code) else {
+            throw TranslationError.unsupportedTarget(code)
+        }
+        sessionGeneration &+= 1
+        currentMode = mode
+        translationRequestContext = TranslationRequestContext(
+            generation: sessionGeneration,
+            target: target,
+            prompt: TranslationPromptBuilder.prompt(target: target)
+        )
+    }
+
+    func replaceTranslationModeSnapshotForTesting(_ mode: ProcessingMode) {
+        currentMode = mode
+    }
+
+    func frozenTranslationTargetForTesting() -> TranslationLanguage? {
+        translationRequestContext?.target
+    }
+
+    func freezeIntelliSenseForTesting(
+        snapshot: IntelliSenseContextSnapshot,
+        settings: IntelliSenseSettings,
+        expressionProfile: EffectiveExpressionProfile? = nil
+    ) {
+        sessionGeneration &+= 1
+        currentMode = .intelliSense
+        intelliSenseStartedModeID = ProcessingMode.intelliSenseId
+        intelliSenseRequestContext = IntelliSenseRequestContext(
+            settings: settings,
+            snapshot: snapshot,
+            expressionProfile: expressionProfile,
+            startingModeID: ProcessingMode.intelliSenseId,
+            generation: sessionGeneration
+        )
+    }
+
+    func promptForCurrentModeForTesting(text: String? = nil) async -> String {
+        await promptForCurrentMode(text: text)
+    }
+
+    /// Pure formatting seam used to verify that every session completion path
+    /// resolves punctuation from the mode selected for processing.
+    static func formattedOutputText(
+        _ text: String,
+        mode: ProcessingMode,
+        userDefaults: UserDefaults = .standard
+    ) -> String {
+        TextOutputFormatter.format(
+            text,
+            options: .current(
+                userDefaults: userDefaults,
+                modePunctuation: mode.punctuationMode
+            )
+        )
+    }
+
+    static func shouldTrackInjection(
+        shouldTrackLearning: Bool,
+        isReviseActive: Bool,
+        isReviseExcluded: Bool
+    ) -> Bool {
+        shouldTrackLearning || (isReviseActive && !isReviseExcluded)
+    }
+    /// Tracking authorization evaluated against whichever app actually holds
+    /// focus at AX-read time, not the app observed when the decision was made.
+    static func trackedCaptureAuthorization(
+        baseLearningEligible: Bool,
+        intelliSenseSettings: IntelliSenseSettings? = nil,
+        isReviseActive: Bool,
+        reviseSettings: ReviseSettings
+    ) -> @Sendable (String?) -> Bool {
+        { bundleIdentifier in
+            guard let bundleIdentifier, !bundleIdentifier.isEmpty else {
+                return false
+            }
+
+            let learningAllowed = baseLearningEligible
+                && intelliSenseSettings?.isBlacklisted(bundleIdentifier: bundleIdentifier) != true
+
+            let reviseAllowed = isReviseActive
+                && !reviseSettings.isExcluded(bundleIdentifier: bundleIdentifier)
+
+            return learningAllowed || reviseAllowed
+        }
+    }
+
+
+    // MARK: - Dependencies
+
+    private let audioEngine: any AudioCapturing
+    private let intelliSenseSettingsLoader: @Sendable () async -> IntelliSenseSettings
+    private var currentSpeechGraceGate: SpeechGraceGate?
+    private var audioStartTimingTracker: AudioStartTimingTracker?
+
+    init(
+        audioEngine: any AudioCapturing = AudioCaptureEngine(),
+        intelliSenseSettingsLoader: (@Sendable () async -> IntelliSenseSettings)? = nil
+    ) {
+        self.audioEngine = audioEngine
+        self.intelliSenseSettingsLoader = intelliSenseSettingsLoader ?? { await IntelliSenseSettingsStore.shared.load() }
+    }
+
+    private let injectionEngine = TextInjectionEngine()
+    let historyStore = HistoryStore.shared
+    private var asrClient: (any SpeechRecognizer)?
+    private var llmClientCache = LLMClientCache()
+    private(set) var recordingPurpose: RecordingPurpose = .input(.direct)
+
+    private let logger = Logger(
+        subsystem: "com.type4me.session",
+        category: "RecognitionSession"
+    )
+    #if HAS_CLOUD_SUBSCRIPTION
+    private var isCloudMode: Bool { activeProvider == .cloud }
+    #endif
+
+    private func resolveLLMRuntime() async -> ResolvedLLMRuntime? {
+        #if DEBUG
+        if let client = injectedLLMClient {
+            let dummyConfig = LLMConfig(apiKey: "test", model: "test-model", baseURL: "https://example.com")
+            return ResolvedLLMRuntime(providerID: "mock", client: client, config: dummyConfig)
+        }
+        #endif
+        guard let resolution = LLMRuntime.resolve(
+            isCloudMode: isCloudModeForLLM,
+            cache: &llmClientCache
+        ) else {
+            if let staleClient = llmClientCache.remove() {
+                await staleClient.invalidate()
+                DebugFileLogger.log("llm client cache cleared reason=configurationUnavailable")
+            }
+            return nil
+        }
+
+        if let invalidated = resolution.invalidated {
+            await invalidated.invalidate()
+            let reasons = resolution.invalidationReasons.joined(separator: ",")
+            DebugFileLogger.log("llm client cache replaced reasons=\(reasons)")
+        } else if resolution.reused {
+            DebugFileLogger.log("llm client cache reused provider=\(resolution.runtime.providerID)")
+        } else {
+            DebugFileLogger.log("llm client cache created provider=\(resolution.runtime.providerID)")
+        }
+        return resolution.runtime
+    }
+
+    private var isCloudModeForLLM: Bool {
+        #if HAS_CLOUD_SUBSCRIPTION
+        return isCloudMode
+        #else
+        return false
+        #endif
+    }
+
+    /// Model label computed when the recording started. `currentConfig` is cleared before
+    /// history is written, so the label is captured up front.
+    private var sessionASRModelLabel: String?
+
+    private func currentASRModelLabel(for provider: ASRProvider) -> String? {
+        if let sessionASRModelLabel { return sessionASRModelLabel }
+        let config = currentConfig.flatMap { type(of: $0).provider == provider ? $0 : nil }
+            ?? KeychainService.loadASRConfig(for: provider)
+        return Self.asrModelLabel(for: provider, config: config)
+    }
+
+    static func asrModelLabel(for provider: ASRProvider, config: (any ASRProviderConfig)?) -> String? {
+        let providerName = provider.displayName
+        let isBatch = config.map { ASRProviderRegistry.recognitionMode(of: $0) == .batch } ?? false
+
+        if provider == .sherpa {
+            return "\(providerName) · \(ModelManager.selectedStreamingModel.displayName)"
+        }
+        if provider == .cartesia {
+            return "\(providerName) · \(CartesiaASRConfig.model)"
+        }
+        if provider == .stepfun {
+            if let stepConfig = config as? StepFunASRConfig {
+                let m = isBatch ? stepConfig.batchModel : stepConfig.model
+                return "\(providerName) · \(m)"
+            }
+            return "\(providerName) · \(isBatch ? StepFunASRConfig.defaultBatchModel : StepFunASRConfig.defaultModel)"
+        }
+        if provider == .grok {
+            return "\(providerName) · \(GrokASRConfig.model)"
+        }
+        if provider == .tencent {
+            return "\(providerName) · \(TencentASRConfig.engineModelType)"
+        }
+        if provider == .azure {
+            let deployment = (config as? AzureASRConfig)?.deployment ?? AzureASRConfig.streamingModel
+            return "\(providerName) · \(isBatch ? AzureASRConfig.batchModel : deployment)"
+        }
+
+        guard let credentials = config?.toCredentials() else {
+            return providerName
+        }
+
+        let modelKeys = (isBatch ? ["batchModel"] : []) + ["model", "resourceId", "devPid", "lmId"]
+        let model = modelKeys
+            .compactMap { credentials[$0]?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+
+        guard let model else { return providerName }
+        return "\(providerName) · \(model)"
+    }
+
+    private static func volcanoConfigFromEnvironment(
+        _ environment: [String: String]
+    ) -> VolcanoASRConfig? {
+        var credentials = [
+            "resourceId": environment["VOLC_RESOURCE_ID"]
+                ?? VolcanoASRConfig.resourceIdSeedASR,
+        ]
+
+        if let apiKey = nonEmptyEnvironmentValue("VOLC_API_KEY", in: environment) {
+            credentials["authMode"] = VolcanoASRConfig.authModeAPIKey
+            credentials["apiKey"] = apiKey
+        } else if let appKey = nonEmptyEnvironmentValue("VOLC_APP_KEY", in: environment),
+                  let accessKey = nonEmptyEnvironmentValue("VOLC_ACCESS_KEY", in: environment) {
+            credentials["authMode"] = VolcanoASRConfig.authModeLegacy
+            credentials["appKey"] = appKey
+            credentials["accessKey"] = accessKey
+        } else {
+            return nil
+        }
+
+        return VolcanoASRConfig(credentials: credentials)
+    }
+
+    private static func nonEmptyEnvironmentValue(
+        _ key: String,
+        in environment: [String: String]
+    ) -> String? {
+        guard let value = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty
+        else { return nil }
+        return value
+    }
+
+    /// Pre-initialize audio subsystem so the first recording starts instantly.
+    func warmUp() { audioEngine.warmUp() }
+
+    /// Pre-warm TCP connection to the ASR endpoint so the next WebSocket
+    /// connect skips the handshake. Called on app launch and after each recording.
+    nonisolated func warmUpASRConnection() {
+        Task.detached(priority: .utility) {
+            await self.pingASREndpoint()
+        }
+    }
+
+    private func pingASREndpoint() async {
+        #if DEBUG
+        if recordedAudioForTesting != nil { return }
+        #endif
+        let endpoint: String
+        #if HAS_CLOUD_SUBSCRIPTION
+        if KeychainService.selectedASRProvider == .cloud {
+            endpoint = CloudConfig.apiEndpoint + "/health"
+        } else {
+            endpoint = currentASREndpoint()
+        }
+        #else
+        endpoint = currentASREndpoint()
+        #endif
+        guard let url = URL(string: endpoint) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 5
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    private func currentASREndpoint() -> String {
+        let provider = KeychainService.selectedASRProvider
+        switch provider {
+        case .volcano:
+            return "https://openspeech.bytedance.com"
+        case .stepfun:
+            guard let config = KeychainService.loadASRConfig(for: .stepfun) as? StepFunASRConfig else {
+                return StepFunASRConfig.defaultRegion.healthEndpoint
+            }
+            // Batch endpoints are only served from the China site.
+            return config.recognitionMode == .batch
+                ? StepFunASRRegion.china.healthEndpoint
+                : config.region.healthEndpoint
+        case .bailian:
+            guard let config = KeychainService.loadASRConfig(for: .bailian) as? BailianASRConfig else {
+                return BailianASRRegion.default.healthEndpoint
+            }
+            if !config.baseURL.isEmpty, let host = URL(string: config.baseURL)?.host {
+                return "https://\(host)"
+            }
+            return config.region.healthEndpoint
+        case .soniox:
+            return "https://stt-rt.soniox.com"
+        case .deepgram:
+            return "https://api.deepgram.com"
+        case .gemini:
+            return "https://generativelanguage.googleapis.com"
+        case .metaMuse:
+            return "https://api.meta.ai"
+        case .azure:
+            guard let config = KeychainService.loadASRConfig(for: .azure) as? AzureASRConfig else { return "" }
+            let host = config.recognitionMode == .batch ? config.speechHost : config.foundryHost
+            return host.map { "https://\($0)" } ?? ""
+        default:
+            return ""
+        }
+    }
+
+    // MARK: - Mode & Timing
+
+    private var isManualInput = false
+    private var currentMode: ProcessingMode = .direct
+    private var recordingStartTime: Date?
+    private var currentConfig: (any ASRProviderConfig)?
+    /// The ASR provider for the current session, captured at start time.
+    /// stopRecording reads this, not the global setting.
+    private var activeProvider: ASRProvider = .volcano
+
+    // MARK: - UI Callback
+
+    /// Called on every ASR event so the UI layer can update.
+    /// Set by AppDelegate to bridge actor → @MainActor.
+    private var onASREvent: (@Sendable (RecognitionEvent) -> Void)?
+
+    func setOnASREvent(_ handler: @escaping @Sendable (RecognitionEvent) -> Void) {
+        onASREvent = handler
+    }
+
+    #if DEBUG
+    /// Test seam: feeds an event through the same path the client's receive loop
+    /// uses, so how a runtime server error reaches the user is coverable without
+    /// a live provider.
+    func ingestASREventForTesting(_ event: RecognitionEvent) {
+        handleASREvent(event, expectedGeneration: sessionGeneration)
+    }
+
+    private var recordedAudioForTesting: Data?
+    private var batchFallbackForTesting: (@Sendable () async -> String?)?
+
+    /// Exercise stop/cancel with a scripted recognizer, without opening the
+    /// microphone, contacting a provider, or injecting into the user's app.
+    func prepareRecordingStopForTesting(
+        client: any SpeechRecognizer,
+        config: any ASRProviderConfig,
+        provider: ASRProvider = .stepfun,
+        policy: ClipboardOutputPolicy = .cancelProcessed,
+        uploadFailed: Bool = false,
+        speechDetected: Bool = true,
+        audioSender: Task<Void, Never>? = nil,
+        batchFallback: @escaping @Sendable () async -> String?
+    ) async {
+        sessionGeneration &+= 1
+        state = .recording
+        currentMode = .direct
+        recordingPurpose = .input(.direct)
+        completionIntent = .normal
+        clipboardOutputPolicy = policy
+        activeProvider = provider
+        recordingStartTime = Date().addingTimeInterval(-10)
+        currentTranscript = .empty
+        hasReceivedASRText = false
+        self.speechDetected = speechDetected
+        asrClient = client
+        currentConfig = config
+        lastStreamingError = nil
+        uploadFailureFlag = UploadFailureFlag()
+        uploadFailureFlag?.failed = uploadFailed
+        audioChunkSenderTask = audioSender
+        recordedAudioForTesting = Data(repeating: 0, count: 320_000)
+        batchFallbackForTesting = batchFallback
+        capturesTextOutputForTesting = true
+        capturedTextOutputForTesting = nil
+        let events = await client.events
+        let generation = sessionGeneration
+        eventConsumptionTask = Task { [weak self] in
+            for await event in events {
+                guard !Task.isCancelled else { break }
+                await self?.handleASREvent(event, expectedGeneration: generation)
+                if case .completed = event { break }
+            }
+        }
+    }
+
+    func stoppedTextForTesting() -> String? { capturedTextOutputForTesting?.text }
+    func speechDetectedForTesting() -> Bool { speechDetected }
+    func hasReceivedASRTextForTesting() -> Bool { hasReceivedASRText }
+    #endif
+    #if DEBUG
+    /// Test seam: test-injected LLM client override to precisely verify invocation count and input text.
+    private var injectedLLMClient: (any LLMClient)?
+    private var targetForTesting: (@Sendable () -> TargetApplicationContext)?
+    private var captureContextForTesting: (@Sendable (TargetApplicationContext, IntelliSenseSettings) async -> IntelliSenseContextSnapshot)?
+    private var applySnippetsForTesting: (@Sendable (String, String?) -> SnippetApplication)?
+    private var capturesTextOutputForTesting = false
+
+    typealias IntelliSenseOutputForTesting = (
+        text: String,
+        trace: String?,
+        snippets: SnippetApplication?,
+        contextAvailability: ContextAvailability?,
+        learningPlan: PostInjectionLearningPlan,
+        shouldTrackLearning: Bool
+    )
+    private var capturedTextOutputForTesting: IntelliSenseOutputForTesting?
+
+    func processIntelliSenseForTesting(
+        text: String,
+        startingSnapshot: IntelliSenseContextSnapshot,
+        settings: IntelliSenseSettings,
+        isAutomation: Bool = false,
+        manualInput: Bool = false,
+        cancelled: Bool = false,
+        shortTextExemption: Int = 0,
+        applySnippets: @escaping @Sendable (String, String?) -> SnippetApplication = { text, _ in
+            SnippetApplication(text: text, appliedRules: [])
+        },
+        currentTarget: @escaping @Sendable () -> TargetApplicationContext,
+        capture: @escaping @Sendable (TargetApplicationContext, IntelliSenseSettings) async -> IntelliSenseContextSnapshot
+    ) async -> IntelliSenseOutputForTesting? {
+        freezeIntelliSenseForTesting(snapshot: startingSnapshot, settings: settings)
+        intelliSenseSettings = settings
+        targetBundleId = startingSnapshot.bundleIdentifier
+        intelliSenseTarget = TargetApplicationContext(
+            processIdentifier: nil,
+            bundleIdentifier: startingSnapshot.bundleIdentifier,
+            displayName: startingSnapshot.appName
+        )
+        historySnippetApplication = nil
+        currentMode.shortTextExemption = shortTextExemption
+        recordingPurpose = .input(currentMode)
+        completionIntent = cancelled ? .cancelled : .normal
+        clipboardOutputPolicy = .cancelRawTranscript
+        isAutomationTarget = isAutomation
+        isManualInput = manualInput
+        targetForTesting = currentTarget
+        captureContextForTesting = capture
+        applySnippetsForTesting = applySnippets
+        capturesTextOutputForTesting = true
+        capturedTextOutputForTesting = nil
+        defer {
+            targetForTesting = nil
+            captureContextForTesting = nil
+            applySnippetsForTesting = nil
+            capturesTextOutputForTesting = false
+        }
+        await finishTextOutput(text, generation: sessionGeneration, stopStartedAt: .now, needsLLM: true)
+        return capturedTextOutputForTesting
+    }
+
+    func setInjectedLLMClientForTesting(_ client: (any LLMClient)?) {
+        injectedLLMClient = client
+    }
+
+    private var injectedASRClient: (any SpeechRecognizer)?
+    func setInjectedASRClientForTesting(_ client: (any SpeechRecognizer)?) {
+        injectedASRClient = client
+    }
+    #endif
+
+
+    /// Called with normalized audio level (0..1) for UI visualization.
+    private var onAudioLevel: (@Sendable (Float) -> Void)?
+
+    func setOnAudioLevel(_ handler: @escaping @Sendable (Float) -> Void) {
+        onAudioLevel = handler
+    }
+
+    // MARK: - Session generation (prevents zombie tasks after forceReset)
+
+    private var sessionGeneration: UInt64 = 0
+
+    // MARK: - Accumulated text
+
+    private let maxRecordingDuration: TimeInterval = 600  // 10 minutes
+
+    /// Gemini Live sessions are terminated by the server at roughly 10 minutes,
+    /// measured from `connect()`. Stopping slightly earlier lets Type4Me finish
+    /// the recording through the normal path (and surface the existing
+    /// "已达最大时长" hint) instead of losing the tail to a server-side close.
+    private let geminiMaxRecordingDuration: TimeInterval = 570  // 9m30s
+
+    private func maxRecordingDuration(for provider: ASRProvider) -> TimeInterval {
+        provider == .gemini ? geminiMaxRecordingDuration : maxRecordingDuration
+    }
+
+    private var currentTranscript: RecognitionTranscript = .empty
+    /// Keep evidence of speech even if a provider later clears its partial text.
+    /// Audio levels alone cannot distinguish speech from background noise.
+    private var hasReceivedASRText = false
+    private var eventConsumptionTask: Task<Void, Never>?
+    private var maxDurationTask: Task<Void, Never>?
+    private var asrCleanupTask: Task<Void, Never>?
+    private var asrCleanupGeneration: UInt64?
+    private var finalTranscriptTimeoutTask: Task<Void, Never>?
+    private var firstStreamingTextTimeoutTask: Task<Void, Never>?
+    private var hasEmittedReadyForCurrentSession = false
+    private var audioChunkContinuation: AsyncStream<Data>.Continuation?
+    private var audioChunkSenderTask: Task<Void, Never>?
+    private var uploadFailureFlag: UploadFailureFlag?
+    private var lastStreamingError: Error?
+    private var recoveryTask: Task<Void, Never>?
+    private var recoveryInterruptPromptShown = false
+    private var recoveryRecordId: String?
+    private var recoveryCreatedAt: Date?
+    private var recoveryRawPartialText = ""
+    private var recoveryPartialText = ""
+    private var recoveryDuration: Double = 0
+    private var recoveryModeName: String?
+    private var recoveryModeId: String?
+    private var recoveryTarget: (bundleId: String?, appName: String?) = (nil, nil)
+    private var recoveryProvider: ASRProvider = .volcano
+    private var recoveryASRModel: String?
+
+    /// Flipped to true when mic level exceeds threshold during recording.
+    /// When false at stop time, we skip the full ASR teardown (no speech = nothing to finalize).
+    private var speechDetected = false
+    private static let speechLevelThreshold: Float = 0.15
+
+    private func markSpeechDetected() {
+        if !speechDetected {
+            speechDetected = true
+        }
+    }
+
+    // MARK: - Prompt context (selected text + clipboard captured at recording start)
+
+    private struct PendingPromptContextCapture: Sendable {
+        let id: UUID
+        let generation: UInt64
+        let requirements: PromptContext.CaptureRequirements
+        let task: Task<PromptContext, Never>
+    }
+
+    private var promptContext: PromptContext = .empty
+    private var capturedPromptContextRequirements: PromptContext.CaptureRequirements = []
+    private var pendingPromptContextCapture: PendingPromptContextCapture?
+    /// A serialization barrier that prevents temporary Command+C clipboard
+    /// fallbacks from consecutive sessions from overlapping their restore work.
+    private var lastPromptContextCaptureTask: Task<PromptContext, Never>?
+    private var lastPromptContextCaptureID: UUID?
+
+    private func resetPromptContextCapture(
+        for purpose: RecordingPurpose,
+        generation: UInt64
+    ) {
+        promptContext = .empty
+        capturedPromptContextRequirements = []
+        pendingPromptContextCapture = nil
+        guard case .input(let mode) = purpose else { return }
+        schedulePromptContextCaptureIfNeeded(for: mode, generation: generation)
+    }
+
+    private func schedulePromptContextCaptureIfNeeded(
+        for mode: ProcessingMode,
+        generation: UInt64
+    ) {
+        // Selection Ask consumes the selection outside normal template expansion.
+        // Mac Action passes it to selection-aware actions after the LLM reply.
+        let requiresSelection = mode.executionKind == .selectionAsk
+            || mode.id == ProcessingMode.macActionId
+        let requested = PromptContext.captureRequirements(
+            for: mode.prompt,
+            requiresSelection: requiresSelection
+        )
+        let pendingRequirements = pendingPromptContextCapture?.generation == generation
+            ? pendingPromptContextCapture?.requirements ?? []
+            : []
+        let covered = capturedPromptContextRequirements.union(pendingRequirements)
+        let missing = requested.subtracting(covered)
+
+        guard !missing.isEmpty else {
+            if requested.isEmpty {
+                DebugFileLogger.log(
+                    "prompt context capture skipped mode=\(mode.name) requirements=none"
+                )
+            }
+            return
+        }
+
+        let previousTask = lastPromptContextCaptureTask
+        let previousPending = pendingPromptContextCapture
+        let baseContext = promptContext
+        let id = UUID()
+        let combinedRequirements = covered.union(missing)
+        DebugFileLogger.log(
+            "prompt context capture scheduled mode=\(mode.name) "
+                + "missing=\(missing.logDescription) "
+                + "total=\(combinedRequirements.logDescription)"
+        )
+
+        let task = Task.detached {
+            let previousResult = await previousTask?.value
+            let base: PromptContext
+            if previousPending?.generation == generation, let previousResult {
+                base = previousResult
+            } else {
+                base = baseContext
+            }
+
+            let captureStartedAt = ContinuousClock.now
+            let addition = await PromptContext.capture(requirements: missing)
+            DebugFileLogger.log(
+                "prompt context capture completed requirements=\(missing.logDescription) "
+                    + "duration=\(ContinuousClock.now - captureStartedAt)"
+            )
+            return base.merging(addition)
+        }
+
+        lastPromptContextCaptureTask = task
+        lastPromptContextCaptureID = id
+        pendingPromptContextCapture = PendingPromptContextCapture(
+            id: id,
+            generation: generation,
+            requirements: combinedRequirements,
+            task: task
+        )
+        Task { [weak self] in
+            _ = await task.value
+            await self?.clearPromptContextCaptureBarrier(id: id)
+        }
+    }
+
+    private func clearPromptContextCaptureBarrier(id: UUID) {
+        guard lastPromptContextCaptureID == id else { return }
+        lastPromptContextCaptureTask = nil
+        lastPromptContextCaptureID = nil
+    }
+
+    private func resolvePromptContextIfNeeded(generation: UInt64) async {
+        while let pending = pendingPromptContextCapture,
+              pending.generation == generation {
+            let context = await pending.task.value
+            guard sessionGeneration == generation else { return }
+
+            // A cross-mode switch may schedule a superset while this task is
+            // suspended. In that case, wait for the replacement task instead.
+            guard pendingPromptContextCapture?.id == pending.id else { continue }
+
+            promptContext = context
+            capturedPromptContextRequirements.formUnion(pending.requirements)
+            pendingPromptContextCapture = nil
+            DebugFileLogger.log(
+                "prompt context capture resolved requirements="
+                    + capturedPromptContextRequirements.logDescription
+            )
+            return
+        }
+    }
+
+    private struct IntelliSenseRequestContext: Sendable {
+        let settings: IntelliSenseSettings
+        let snapshot: IntelliSenseContextSnapshot
+        let expressionProfile: EffectiveExpressionProfile?
+        let startingModeID: UUID
+        let generation: UInt64
+    }
+
+    private var intelliSenseContextTask: Task<IntelliSenseContextSnapshot, Never>?
+    private var intelliSenseRequestContext: IntelliSenseRequestContext?
+    private var intelliSenseSettings: IntelliSenseSettings?
+    private var intelliSenseTarget: TargetApplicationContext?
+    private var intelliSenseStartedModeID: UUID?
+    private var intelliSenseCrossModeFallback = false
+    private var intelliSenseGuardRejected = false
+    private var intelliSenseLastProcessingResult: IntelliSenseProcessingResult?
+
+    private struct TranslationRequestContext: Sendable {
+        let generation: UInt64
+        let target: TranslationLanguage
+        let prompt: String
+    }
+
+    private var translationRequestContext: TranslationRequestContext?
+    /// Provider/model paired with the LLM request whose result this history row uses.
+    private var historyLLMProvider: String?
+    private var historyLLMModel: String?
+    private var historyASRDurationSeconds: Double?
+    private var historyLLMDurationSeconds: Double?
+    /// The replacement pass this session's output went through, captured where the
+    /// rules are applied rather than reconstructed afterwards (#300).
+    private var historySnippetApplication: SnippetApplication?
+
+    /// Bundle identifier of the frontmost app when recording started.
+    /// Used to select app-specific snippet rules outside interactive Intelli Sense.
+    private var targetBundleId: String?
+    /// The frontmost application captured when recording starts, used to restore focus if needed.
+    private var targetApplication: NSRunningApplication?
+
+    /// The app a history record is attributed to: where the text actually
+    /// landed when known, otherwise the app focused at recording start.
+    private func historyTarget(insertedInto bundleId: String? = nil) -> (bundleId: String?, appName: String?) {
+        guard let id = bundleId ?? targetBundleId, id != Bundle.main.bundleIdentifier else {
+            return (nil, nil)
+        }
+        if targetApplication?.bundleIdentifier == id {
+            return (id, targetApplication?.localizedName)
+        }
+        let running = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == id }
+        return (id, running?.localizedName)
+    }
+    /// Whether this recording was triggered by an automated flow (e.g. URL Scheme).
+    /// Automated flows require restoring/activating their pinned target application.
+    /// Ordinary user input writes to the current keyboard focus without switching apps.
+    private var isAutomationTarget: Bool = false
+
+    /// Pure, testable classification of how to treat the injection target that was
+    /// captured when recording started, evaluated at paste time.
+    enum InjectionTargetPlan: Equatable {
+        case injectIntoCurrentFrontmost
+        case activateAndConfirm
+        case failSafeClipboard
+    }
+
+    static func planInjectionTarget(
+        isAutomation: Bool = false,
+        hasCapturedTarget: Bool = true,
+        isTerminated: Bool = false
+    ) -> InjectionTargetPlan {
+        guard isAutomation else {
+            return .injectIntoCurrentFrontmost
+        }
+        guard hasCapturedTarget else { return .injectIntoCurrentFrontmost }
+        return isTerminated ? .failSafeClipboard : .activateAndConfirm
+    }
+
+    /// Activates `target` and waits until it actually becomes the frontmost
+    /// application, up to a short timeout. Returns `true` only once the target is
+    /// confirmed frontmost, so callers can fail-safe (skip pasting) instead of
+    /// risking text landing in whatever application happens to be focused.
+    ///
+    /// `NSRunningApplication.activate()` is asynchronous and can fail (e.g. the app
+    /// quit, or the system denied activation), so its return value alone is not a
+    /// safe signal — we verify the real frontmost app instead.
+    nonisolated static func activateAndConfirmFrontmost(_ target: NSRunningApplication) -> Bool {
+        let targetPid = target.processIdentifier
+        guard !target.isTerminated, let targetBundleID = target.bundleIdentifier else {
+            return false
+        }
+        let activated = DispatchQueue.main.sync {
+            target.activate()
+        }
+        if !activated {
+            DebugFileLogger.log("stop: target.activate() returned false pid=\(targetPid)")
+        }
+        if !target.isTerminated,
+           !isExpectedFrontmostApplication(pid: targetPid, bundleIdentifier: targetBundleID) {
+            // macOS can reject delayed activation from a menu-bar app even
+            // though the recording began from a global user hotkey. Type4Me is
+            // already Accessibility-trusted, so use the target application's
+            // explicit AXFrontmost attribute as a narrow fallback.
+            let appElement = AXUIElementCreateApplication(targetPid)
+            AXUIElementSetMessagingTimeout(appElement, 0.1)
+            let axResult = AXUIElementSetAttributeValue(
+                appElement,
+                kAXFrontmostAttribute as CFString,
+                true as CFTypeRef
+            )
+            DebugFileLogger.log(
+                "stop: target AXFrontmost fallback result=\(axResult.rawValue) pid=\(targetPid)"
+            )
+        }
+        // Switching back to an app on another macOS Space includes the desktop
+        // animation, which regularly takes longer than 400 ms.
+        let deadline = Date().addingTimeInterval(1.0)
+        while Date() < deadline {
+            if target.isTerminated { return false }
+            if isExpectedFrontmostApplication(pid: targetPid, bundleIdentifier: targetBundleID) {
+                return true
+            }
+            usleep(20_000)
+        }
+        return !target.isTerminated
+            && isExpectedFrontmostApplication(pid: targetPid, bundleIdentifier: targetBundleID)
+    }
+
+    nonisolated private static func isExpectedFrontmostApplication(
+        pid: pid_t,
+        bundleIdentifier: String
+    ) -> Bool {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return false }
+        return frontmost.processIdentifier == pid
+            && frontmost.bundleIdentifier?.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
+    }
+
+    // MARK: - Post-stop LLM
+
+    private struct TimedLLMResult: Sendable {
+        let text: String?
+        let durationSeconds: Double
+    }
+
+    /// Stores the last LLM error from the final LLM task, consumed once by stopRecording().
+    private var pendingLLMError: Error?
+    private var pendingSelectionAskRequestContext: SelectionAskRequestContext?
+    private enum CompletionIntent: Sendable {
+        case normal
+        case cancelled
+    }
+
+    /// Both the clipboard policy and the completion intent are frozen per
+    /// session so a Settings change cannot alter an in-flight recording.
+    private var clipboardOutputPolicy = ClipboardOutputPolicy.defaultValue
+    private var completionIntent: CompletionIntent = .normal
+    /// Continuation resumed when a final (isFinal) transcript arrives during stop.
+    private var finalTranscriptCont: CheckedContinuation<String?, Never>?
+    /// Continuation resumed when first non-empty streaming text arrives (for short-recording wait).
+    private var firstStreamingTextCont: CheckedContinuation<Bool, Never>?
+
+    // MARK: - Toggle
+
+    func toggleRecording() async {
+        switch state {
+        case .idle:
+            await startRecording()
+        case .recording:
+            await stopRecording()
+        case .recovering:
+            _ = await handleRecoveryHotkeyPress()
+        default:
+            logger.warning("toggleRecording ignored in state: \(String(describing: self.state))")
+        }
+    }
+
+    func handleRecoveryHotkeyPress() async -> RecoveryHotkeyAction {
+        guard state == .recovering else { return .notRecovering }
+
+        if !recoveryInterruptPromptShown {
+            recoveryInterruptPromptShown = true
+            onASREvent?(.recoveryPrompt(
+                text: recoveryPartialText,
+                message: L(
+                    "正在恢复上一次识别。继续按下将打断当前恢复并重新开始录音。",
+                    "Recovering the previous dictation. Press again to interrupt recovery and start a new recording."
+                )
+            ))
+            return .prompted
+        }
+
+        await interruptRecoveryForRestart()
+        return .interrupted
+    }
+
+    private func interruptRecoveryForRestart() async {
+        DebugFileLogger.log("recovery interrupted by hotkey")
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        if !recoveryPartialText.isEmpty {
+            await saveRecoveryHistory(status: "recovery_interrupted", finalText: recoveryPartialText)
+        }
+        onASREvent?(.recoveryInterrupted(
+            text: recoveryPartialText,
+            message: L("已停止恢复，开始新的录音", "Recovery stopped. Starting a new recording.")
+        ))
+        clearRecoveryState()
+        state = .idle
+        currentTranscript = .empty
+        warmUpASRConnection()
+    }
+
+    // MARK: - Start
+
+    func startRecording(
+        mode: ProcessingMode = .direct,
+        requestedAt: ContinuousClock.Instant? = nil,
+        awaitIdleDuration: Duration? = nil,
+        isAutomation: Bool = false
+    ) async {
+        await startRecording(
+            purpose: .input(mode),
+            requestedAt: requestedAt,
+            awaitIdleDuration: awaitIdleDuration,
+            isAutomation: isAutomation
+        )
+    }
+
+    /// Freeze the original destination and any context needed by the offered modes,
+    /// before the editor takes keyboard focus. No mode is chosen and no ASR starts.
+    func startManualInput(modes: [ProcessingMode]) async -> Bool {
+        guard state == .idle, modes.contains(where: \.supportsManualInput) else { return false }
+        await startRecording(purpose: .input(.direct), manualInput: true)
+        guard isManualInput, state == .recording else { return false }
+        let generation = sessionGeneration
+        for mode in modes where mode.supportsManualInput {
+            schedulePromptContextCaptureIfNeeded(for: mode, generation: generation)
+        }
+        if modes.contains(where: { $0.id == ProcessingMode.intelliSenseId && $0.supportsManualInput }) {
+            let settings = await IntelliSenseSettingsStore.shared.load()
+            guard sessionGeneration == generation else { return false }
+            let target = TargetApplicationContext(
+                processIdentifier: targetApplication?.processIdentifier,
+                bundleIdentifier: targetApplication?.bundleIdentifier,
+                displayName: targetApplication?.localizedName)
+            intelliSenseSettings = settings
+            intelliSenseTarget = target
+            intelliSenseStartedModeID = ProcessingMode.intelliSenseId
+            intelliSenseContextTask = Task {
+                await IntelliSenseContextCapturer.capture(target: target, settings: settings)
+            }
+        }
+        await resolvePromptContextIfNeeded(generation: generation)
+        _ = await intelliSenseContextTask?.value
+        return sessionGeneration == generation && isManualInput && state == .recording
+    }
+
+    func submitManualInput(_ text: String, mode: ProcessingMode) async {
+        guard isManualInput, state == .recording, mode.supportsManualInput,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Manual processing is independent of the selected speech provider.
+        currentMode = mode
+        recordingPurpose = .input(mode)
+        if mode.id != ProcessingMode.intelliSenseId { clearIntelliSenseSessionContext() }
+        clearTranslationSessionContext()
+        if mode.id == ProcessingMode.translationModeId,
+           let target = TranslationLanguage(rawValue: mode.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue) {
+            translationRequestContext = TranslationRequestContext(
+                generation: sessionGeneration, target: target, prompt: TranslationPromptBuilder.prompt(target: target))
+            onASREvent?(.processingLabelOverride(L(
+                "正在翻译为\(target.displayName)…", "Translating to \(target.displayName)…")))
+        }
+        state = .finishing
+        await finishTextOutput(text, generation: sessionGeneration, stopStartedAt: .now,
+                               needsLLM: Self.shouldRunInputModeLLM(recordingPurpose: recordingPurpose, mode: mode))
+    }
+
+    func startReviseRecording(_ target: RevisePreparedTarget) async {
+        await startRecording(purpose: .revise(target))
+    }
+
+    func cancelReviseRecording() async {
+        if case .revise(let prepared) = recordingPurpose {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+        }
+        await forceReset()
+        onASREvent?(.reviseCancelled)
+    }
+
+    func startRecording(
+        purpose: RecordingPurpose,
+        requestedAt: ContinuousClock.Instant? = nil,
+        awaitIdleDuration: Duration? = nil,
+        isAutomation: Bool = false,
+        manualInput: Bool = false
+    ) async {
+        let recordingRequestStartedAt = requestedAt ?? ContinuousClock.now
+        let sessionEntryAt = ContinuousClock.now
+        if state == .finishing || state == .injecting || state == .postProcessing || state == .recovering {
+            NSLog("[Session] startRecording: blocked, current session still processing (state=%@)", String(describing: state))
+            DebugFileLogger.log("startRecording blocked: still processing state=\(state)")
+            return
+        }
+        if state != .idle {
+            NSLog("[Session] startRecording: forcing reset from state=%@", String(describing: state))
+            DebugFileLogger.log("session forcing reset from state=\(state)")
+            await forceReset()
+        }
+
+        sessionGeneration &+= 1
+        let myGeneration = sessionGeneration
+        state = .starting
+        hasReceivedASRText = false
+
+        let frontmostApplication = NSWorkspace.shared.frontmostApplication
+        let isSelf = frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+        if isSelf {
+            targetApplication = nil
+            targetBundleId = nil
+        } else {
+            targetApplication = frontmostApplication
+            targetBundleId = frontmostApplication?.bundleIdentifier
+        }
+        let provider = KeychainService.selectedASRProvider
+        activeProvider = provider
+        sessionASRModelLabel = nil
+
+        #if HAS_CLOUD_SUBSCRIPTION
+        if provider == .cloud && !manualInput {
+            let canUse = await CloudQuotaManager.shared.canUse()
+            guard sessionGeneration == myGeneration else {
+                DebugFileLogger.log("startRecording: zombie after cloud quota check, bailing")
+                return
+            }
+            if !canUse {
+                SoundFeedback.playError()
+                state = .idle
+                onASREvent?(.error(NSError(
+                    domain: "Type4Me", code: -10,
+                    userInfo: [NSLocalizedDescriptionKey: L("免费额度已用完", "Free quota exhausted")]
+                )))
+                onASREvent?(.completed)
+                return
+            }
+        }
+        #endif
+
+        // Every early return between capture start and the hand-off below must
+        // release the microphone; Bluetooth routes depend on it.
+        var earlyCaptureOwned = false
+        defer {
+            if earlyCaptureOwned {
+                releaseEarlyCapture(generation: myGeneration)
+            }
+        }
+
+        let audioBuffer = AudioChunkBuffer()
+
+        if !manualInput {
+            let captureStartBeginAt = ContinuousClock.now
+            let gate = SpeechGraceGate()
+            self.currentSpeechGraceGate = gate
+            speechDetected = false
+            let levelHandler = self.onAudioLevel
+
+            audioEngine.onAudioLevel = { [weak self, weak gate] level in
+                if level > RecognitionSession.speechLevelThreshold {
+                    if let gate, !gate.isSpeechIgnored() {
+                        Task { await self?.markSpeechDetected() }
+                    }
+                }
+                levelHandler?(level)
+            }
+
+            audioEngine.onAudioChunk = { [weak self] data in
+                guard self != nil else { return }
+                audioBuffer.append(data)
+            }
+
+            let captureResolution = AudioInputDevicePreferenceStore.cachedCaptureResolution()
+            let selectedDeviceUID: String?
+            switch captureResolution {
+            case .explicitDevice(let uid):
+                selectedDeviceUID = uid
+            case .systemDefault:
+                selectedDeviceUID = nil
+            }
+            let preferenceMode = AudioInputDevicePreferenceStore.mode().rawValue
+            let priorityUIDs = AudioInputDevicePreferenceStore.priorityEntries().map(\.uid).joined(separator: ",")
+            audioEngine.selectedDeviceUID = selectedDeviceUID
+            DebugFileLogger.log(
+                "audio input selected uid=\(selectedDeviceUID ?? "system-default") " +
+                "mode=\(preferenceMode) priority=[\(priorityUIDs)]"
+            )
+
+            let inputDevice: AVCaptureDevice?
+            if let uid = selectedDeviceUID, !uid.isEmpty {
+                inputDevice = AVCaptureDevice(uniqueID: uid)
+            } else {
+                inputDevice = AVCaptureDevice.default(for: .audio)
+            }
+            StartSoundRouteGate.shared.arm(generation: myGeneration, inputDevice: inputDevice)
+
+            let startTimingTracker = AudioStartTimingTracker(
+                generation: myGeneration,
+                requestedAt: recordingRequestStartedAt,
+                awaitIdleDuration: awaitIdleDuration,
+                sessionEntryDuration: sessionEntryAt - recordingRequestStartedAt,
+                captureStartBeginDuration: captureStartBeginAt - recordingRequestStartedAt
+            )
+            self.audioStartTimingTracker = startTimingTracker
+
+            audioEngine.onFirstSample = { [weak self] sampleTime in
+                Task { [weak self] in
+                    await self?.recordFirstSample(at: sampleTime, generation: myGeneration)
+                }
+            }
+
+            do {
+                try audioEngine.start()
+                earlyCaptureOwned = true
+                let startInfo = audioEngine.lastStartInfo
+                startTimingTracker.recordEngineStart(info: startInfo)
+                DebugFileLogger.log("audio engine early started OK gen=\(myGeneration)")
+            } catch {
+                NSLog("[Session] Audio engine early start FAILED: %@", String(describing: error))
+                DebugFileLogger.log("audio engine early start failed: \(String(describing: error))")
+                SoundFeedback.playError()
+                StartSoundRouteGate.shared.disarm(generation: myGeneration)
+                audioEngine.onAudioChunk = nil
+                audioEngine.onAudioLevel = nil
+                audioEngine.onFirstSample = nil
+                state = .idle
+                onASREvent?(.error(error))
+                onASREvent?(.completed)
+                clearIntelliSenseSessionContext()
+                return
+            }
+        }
+
+        await MainActor.run {
+            CorrectionLearningCoordinator.shared.finalizeBeforeNextRecording()
+        }
+        guard sessionGeneration == myGeneration else {
+            DebugFileLogger.log("startRecording: zombie after finalizeBeforeNextRecording, bailing")
+            return
+        }
+
+        self.isManualInput = manualInput
+        self.recordingPurpose = purpose
+        self.isAutomationTarget = isAutomation
+        clipboardOutputPolicy = ClipboardOutputPolicy.current()
+        completionIntent = .normal
+        stoppedByMaxDuration = false
+
+        historyLLMProvider = nil
+        historyLLMModel = nil
+        historyASRDurationSeconds = nil
+        historyLLMDurationSeconds = nil
+        historySnippetApplication = nil
+        clearIntelliSenseSessionContext()
+        clearTranslationSessionContext()
+        intelliSenseGuardRejected = false
+
+        switch purpose {
+        case .input(let mode):
+            let effectiveMode = manualInput ? mode : ASRProviderRegistry.resolvedMode(for: mode, provider: provider)
+            if effectiveMode.executionKind != .selectionAsk {
+                pendingSelectionAskRequestContext = nil
+            } else if pendingSelectionAskRequestContext == nil {
+                pendingSelectionAskRequestContext = SelectionAskRequestContext(
+                    requestID: UUID(),
+                    sessionID: nil,
+                    turnID: nil,
+                    selectedText: "",
+                    overridesSelectedText: false,
+                    conversationContext: "",
+                    contextWasTruncated: false
+                )
+            }
+            self.currentMode = effectiveMode
+
+            if effectiveMode.id == ProcessingMode.translationModeId {
+                let code = effectiveMode.translationTargetLanguageCode
+                    ?? TranslationLanguage.english.rawValue
+                guard let target = TranslationLanguage(rawValue: code) else {
+                    SoundFeedback.playError()
+                    state = .idle
+                    onASREvent?(.error(TranslationError.unsupportedTarget(code)))
+                    onASREvent?(.completed)
+                    return
+                }
+                translationRequestContext = TranslationRequestContext(
+                    generation: myGeneration,
+                    target: target,
+                    prompt: TranslationPromptBuilder.prompt(target: target)
+                )
+                DebugFileLogger.log(
+                    "translation start target=\(target.rawValue) generation=\(myGeneration)"
+                )
+            }
+            if effectiveMode.id == ProcessingMode.intelliSenseId {
+                let settings = await intelliSenseSettingsLoader()
+                guard sessionGeneration == myGeneration else {
+                    DebugFileLogger.log("startRecording: zombie after IntelliSense settings load, bailing")
+                    return
+                }
+                let target = TargetApplicationContext(
+                    processIdentifier: frontmostApplication?.processIdentifier,
+                    bundleIdentifier: frontmostApplication?.bundleIdentifier,
+                    displayName: frontmostApplication?.localizedName
+                )
+                intelliSenseSettings = settings
+                intelliSenseTarget = target
+                intelliSenseStartedModeID = effectiveMode.id
+                if isAutomation {
+                    intelliSenseContextTask = Task {
+                        await IntelliSenseContextCapturer.capture(target: target, settings: settings)
+                    }
+                }
+            }
+
+        case .revise:
+            pendingSelectionAskRequestContext = nil
+        }
+
+        resetPromptContextCapture(for: purpose, generation: myGeneration)
+
+        func makeFinishHint(for provider: ASRProvider, config: any ASRProviderConfig) -> RecordingFinishHint {
+            let capabilities = ASRProviderRegistry.capabilities(for: provider, config: config)
+            let isStreaming = capabilities.isStreaming
+            let isQwen3Only: Bool = {
+                guard provider == .sherpa else { return false }
+                let streamingEnabled = UserDefaults.standard.object(forKey: "tf_sensevoiceEnabled") as? Bool ?? true
+                return !streamingEnabled
+            }()
+            let waitsForFullAudio = !isStreaming || isQwen3Only
+            let performsCalibration: Bool = {
+                guard provider == .sherpa, !isQwen3Only else { return false }
+                let qwen3Enabled = UserDefaults.standard.object(forKey: "tf_qwen3FinalEnabled") as? Bool ?? true
+                return qwen3Enabled
+            }()
+            let supportsRealtime: Bool = {
+                if provider == .sherpa {
+                    return !isQwen3Only
+                }
+                return capabilities.supportsRealtimeRecognition
+            }()
+            let runsLLM = Self.shouldRunInputModeLLM(recordingPurpose: recordingPurpose, mode: currentMode)
+            let shortTextExemption = currentMode.shortTextExemption
+            return RecordingFinishHint(
+                waitsForFullAudioRecognition: waitsForFullAudio,
+                performsCalibration: performsCalibration,
+                runsLLM: runsLLM,
+                shortTextExemption: shortTextExemption,
+                supportsRealtimeRecognition: supportsRealtime
+            )
+        }
+
+        self.recordingStartTime = nil
+        hasEmittedReadyForCurrentSession = false
+        pendingLLMError = nil
+        lastStreamingError = nil
+        state = .starting
+
+        if manualInput {
+            currentTranscript = .empty
+            currentConfig = nil
+            uploadFailureFlag = nil
+            await resolvePromptContextIfNeeded(generation: myGeneration)
+            _ = await intelliSenseContextTask?.value
+            guard sessionGeneration == myGeneration else { return }
+            state = .recording
+            return
+        }
+
+        #if DEBUG
+        if let mockClient = injectedASRClient {
+            self.asrClient = mockClient
+            self.currentConfig = SherpaASRConfig(credentials: ["modelDir": ModelManager.defaultModelsDir])!
+            let hint = makeFinishHint(for: .sherpa, config: self.currentConfig!)
+            onASREvent?(.finishHint(hint))
+            earlyCaptureOwned = false
+            state = .recording
+            markReadyIfNeeded()
+            return
+        }
+        #endif
+
+        // Load credentials for selected provider
+        let config: any ASRProviderConfig
+
+        if provider.isLocal {
+            if let savedConfig = KeychainService.loadASRConfig(for: provider) {
+                config = savedConfig
+                NSLog("[Session] Loaded %@ config from file store", provider.rawValue)
+            } else if let defaultConfig = SherpaASRConfig(credentials: ["modelDir": ModelManager.defaultModelsDir]) {
+                config = defaultConfig
+                NSLog("[Session] Using default model directory for %@", provider.rawValue)
+            } else {
+                NSLog("[Session] Failed to create default config for %@!", provider.rawValue)
+                SoundFeedback.playError()
+                state = .idle
+                onASREvent?(.error(NSError(domain: "Type4Me", code: -1, userInfo: [NSLocalizedDescriptionKey: L("本地模型未配置", "Local model not configured")])))
+                onASREvent?(.completed)
+                clearIntelliSenseSessionContext()
+                return
+            }
+            if !ModelManager.shared.areRequiredModelsAvailable() {
+                NSLog("[Session] Required local models not downloaded for %@", provider.rawValue)
+                SoundFeedback.playError()
+                state = .idle
+                onASREvent?(.error(NSError(domain: "Type4Me", code: -3, userInfo: [NSLocalizedDescriptionKey: L("请先下载识别模型", "Please download ASR models first")])))
+                onASREvent?(.completed)
+                clearIntelliSenseSessionContext()
+                return
+            }
+        } else if let savedConfig = KeychainService.loadASRConfig(for: provider) {
+            config = savedConfig
+            NSLog("[Session] Loaded %@ credentials from file store", provider.rawValue)
+        } else if provider == .volcano,
+                  let volcConfig = Self.volcanoConfigFromEnvironment(
+                      ProcessInfo.processInfo.environment
+                  ) {
+            do {
+                try KeychainService.saveASRCredentials(for: .volcano, values: volcConfig.toCredentials())
+                NSLog("[Session] Loaded credentials from env vars and persisted to file")
+            } catch {
+                NSLog("[Session] WARNING: env var credentials loaded but failed to persist: %@", String(describing: error))
+            }
+            config = volcConfig
+        } else {
+            NSLog("[Session] No ASR credentials found for provider=%@!", provider.rawValue)
+            SoundFeedback.playError()
+            state = .idle
+            onASREvent?(.error(NSError(domain: "Type4Me", code: -1, userInfo: [NSLocalizedDescriptionKey: L("未配置 API凭证", "API credentials not configured")])))
+            onASREvent?(.completed)
+            clearIntelliSenseSessionContext()
+            return
+        }
+
+        self.currentConfig = config
+        sessionASRModelLabel = Self.asrModelLabel(for: provider, config: config)
+        let hint = makeFinishHint(for: provider, config: config)
+        onASREvent?(.finishHint(hint))
+
+        guard let client = ASRProviderRegistry.createClient(for: provider, config: config) else {
+            NSLog("[Session] No client implementation for provider=%@", provider.rawValue)
+            SoundFeedback.playError()
+            state = .idle
+            onASREvent?(.error(NSError(domain: "Type4Me", code: -2, userInfo: [NSLocalizedDescriptionKey: L("\(provider.displayName) 暂不支持", "\(provider.displayName) not yet supported")])))
+            onASREvent?(.completed)
+            clearIntelliSenseSessionContext()
+            return
+        }
+        self.asrClient = client
+
+        let hotwords = HotwordStorage.loadEffective()
+        let biasSettings = ASRBiasSettingsStorage.load()
+        let requestOptions = ASRRequestOptions(
+            enablePunc: true,
+            hotwords: hotwords,
+            boostingTableID: biasSettings.boostingTableID,
+            bypassProxy: ProxyBypassMode.current.bypassASR
+        )
+
+        currentTranscript = .empty
+        await finishAudioChunkPipeline(timeout: .milliseconds(100))
+        guard sessionGeneration == myGeneration else {
+            DebugFileLogger.log("startRecording: zombie detected after pipeline cleanup, bailing")
+            return
+        }
+
+        earlyCaptureOwned = false
+        state = .recording
+        markReadyIfNeeded()
+        DebugFileLogger.log("session entered recording state (buffering, ASR connecting)")
+        // Volume lowered in Type4MeApp .ready handler
+
+        // ── Phase 2: Connect ASR (audio is already recording) ──
+
+        do {
+            DebugFileLogger.log("ASR connecting provider=\(provider.rawValue)")
+            try await client.connect(config: config, options: requestOptions)
+            NSLog(
+                "[Session] ASR connected OK (streaming, hotwords=%d, history=%d)",
+                hotwords.count,
+                requestOptions.contextHistoryLength
+            )
+            DebugFileLogger.log("ASR connected OK provider=\(provider.rawValue)")
+        } catch {
+            // stopRecording() may intentionally disconnect the recognizer while
+            // connect() is suspended. That cancellation belongs to the stopped
+            // (or superseded) session and must not surface as an ASR failure.
+            guard Self.shouldReportASRConnectFailure(
+                expectedGeneration: myGeneration,
+                currentGeneration: sessionGeneration,
+                state: state
+            ) else {
+                DebugFileLogger.log(
+                    "ASR connect ended after session stopped "
+                        + "provider=\(provider.rawValue) gen=\(myGeneration) "
+                        + "current=\(sessionGeneration) state=\(state) "
+                        + "error=\(String(describing: error))"
+                )
+                await client.disconnect()
+                if sessionGeneration == myGeneration {
+                    self.asrClient = nil
+                }
+                return
+            }
+            NSLog("[Session] ASR connect FAILED provider=%@ error=%@", provider.rawValue, String(describing: error))
+            DebugFileLogger.log("ASR connect failed provider=\(provider.rawValue): \(String(describing: error))")
+            SoundFeedback.playError()
+            audioEngine.stop()
+            audioEngine.onAudioChunk = nil
+            audioEngine.onAudioLevel = nil
+            await client.disconnect()
+            self.asrClient = nil
+            state = .idle
+            hasEmittedReadyForCurrentSession = false
+            onASREvent?(.error(error))
+            onASREvent?(.completed)
+            SystemVolumeManager.restore()
+            clearIntelliSenseSessionContext()
+            return
+        }
+
+        // Bail out if session was superseded or user stopped while we were connecting
+        guard sessionGeneration == myGeneration, state == .recording else {
+            DebugFileLogger.log("startRecording: zombie or state change after connect (gen=\(myGeneration) current=\(sessionGeneration) state=\(state)), bailing")
+            await client.disconnect()
+            if sessionGeneration == myGeneration {
+                self.asrClient = nil
+            }
+            return
+        }
+
+        // ── Phase 3: Flush buffer → switch to live pipeline ──
+
+        let events = await client.events
+        let expectedGeneration = sessionGeneration
+        eventConsumptionTask = Task { [weak self] in
+            for await event in events {
+                guard let self else { break }
+                await self.handleASREvent(event, expectedGeneration: expectedGeneration)
+                if case .completed = event { break }
+            }
+        }
+
+        let chunkContinuation = setupAudioChunkPipeline()
+
+        // Flush all chunks buffered during connect
+        let bufferedChunks = audioBuffer.drain()
+        for chunk in bufferedChunks {
+            chunkContinuation.yield(chunk)
+        }
+
+        // Switch callback from buffer to live pipeline
+        var chunkCount = bufferedChunks.count
+        let failureFlag = self.uploadFailureFlag
+        audioEngine.onAudioChunk = { [weak self] data in
+            guard self != nil else { return }
+            if failureFlag?.failed == true { return }
+            chunkCount += 1
+            chunkContinuation.yield(data)
+        }
+
+        // Catch any chunks that arrived between drain and callback switch
+        for chunk in audioBuffer.drain() {
+            chunkContinuation.yield(chunk)
+        }
+
+        DebugFileLogger.log("ASR pipeline live, flushed \(bufferedChunks.count) buffered chunks")
+
+        // Pre-warm LLM connection for modes with post-processing
+        if !currentMode.prompt.isEmpty, let runtime = await resolveLLMRuntime() {
+            Task { await runtime.client.warmUp(baseURL: runtime.config.baseURL) }
+        }
+
+        // Safety: auto-stop after maxRecordingDuration to prevent unbounded memory use
+        maxDurationTask?.cancel()
+        asrCleanupTask?.cancel()
+        asrCleanupTask = nil
+        asrCleanupGeneration = nil
+        let recordingLimit = maxRecordingDuration(for: activeProvider)
+        maxDurationTask = Task { [weak self, recordingLimit] in
+            try? await Task.sleep(for: .seconds(recordingLimit))
+            guard let self, !Task.isCancelled else { return }
+            await self.autoStopIfRecording(limit: recordingLimit)
+        }
+    }
+
+    func setSelectionAskRequestContext(_ context: SelectionAskRequestContext) {
+        pendingSelectionAskRequestContext = context
+    }
+
+    /// Auto-stop triggered by max recording duration timer.
+    private func autoStopIfRecording(limit: TimeInterval) async {
+        guard state == .recording else { return }
+        DebugFileLogger.log("max recording duration reached (\(limit)s), auto-stopping")
+        stoppedByMaxDuration = true
+        await stopRecording()
+    }
+
+
+    private func clearASRCleanupTask(generation: UInt64) {
+        if asrCleanupGeneration == generation {
+            asrCleanupTask = nil
+            asrCleanupGeneration = nil
+        }
+    }
+
+    /// Whether the current session was auto-stopped by max duration limit.
+    private(set) var stoppedByMaxDuration = false
+
+    /// Switch the processing mode before stopping. Used for cross-mode hotkey stops.
+    func switchMode(to mode: ProcessingMode) async {
+        let resolved = ASRProviderRegistry.resolvedMode(for: mode, provider: activeProvider)
+        let previousModeID = currentMode.id
+        if currentMode.id == ProcessingMode.intelliSenseId,
+           resolved.id != ProcessingMode.intelliSenseId {
+            clearIntelliSenseSessionContext()
+        } else if currentMode.id != ProcessingMode.intelliSenseId,
+                  resolved.id == ProcessingMode.intelliSenseId {
+            clearIntelliSenseSessionContext()
+            intelliSenseSettings = await IntelliSenseSettingsStore.shared.load()
+            intelliSenseStartedModeID = currentMode.id
+            intelliSenseCrossModeFallback = true
+        }
+        if previousModeID != ProcessingMode.translationModeId,
+           resolved.id == ProcessingMode.translationModeId {
+            let code = resolved.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue
+            if let target = TranslationLanguage(rawValue: code) {
+                translationRequestContext = TranslationRequestContext(
+                    generation: sessionGeneration,
+                    target: target,
+                    prompt: TranslationPromptBuilder.prompt(target: target)
+                )
+            } else {
+                translationRequestContext = nil
+            }
+        } else if previousModeID == ProcessingMode.translationModeId,
+                  resolved.id != ProcessingMode.translationModeId {
+            clearTranslationSessionContext()
+        }
+        currentMode = resolved
+        schedulePromptContextCaptureIfNeeded(
+            for: resolved,
+            generation: sessionGeneration
+        )
+    }
+
+    // MARK: - Stop
+
+    /// Cancel an in-progress recording: tear down all resources without injecting any text.
+    func cancelRecording() async {
+        guard state == .recording || state == .starting else {
+            logger.warning("cancelRecording called but state is \(String(describing: self.state))")
+            return
+        }
+        DebugFileLogger.log("cancelRecording: discarding session from state=\(state)")
+        StartSoundRouteGate.shared.disarm(generation: sessionGeneration)
+        audioStartTimingTracker?.flushRemainingLog()
+        SystemVolumeManager.restore()
+        await forceReset()
+    }
+
+    /// Mark the current result as cancelled. Recognition and history still
+    /// proceed; the frozen clipboard policy decides whether it is retained.
+    func abortInjection() {
+        completionIntent = .cancelled
+        DebugFileLogger.log(
+            "abortInjection: policy=\(clipboardOutputPolicy.rawValue) "
+                + "processesCancelled=\(clipboardOutputPolicy.processesCancelledResult)"
+        )
+    }
+
+    /// Raw transcript and never-copy cancellation still wait for final ASR,
+    /// but they have no LLM phase. The UI can hide the processing indicator
+    /// while that non-interactive finalization completes.
+    func cancellationHidesProcessingUI() -> Bool {
+        usesClipboardOutputPolicy && !clipboardOutputPolicy.processesCancelledResult
+    }
+
+    /// Parse a Mac Action LLM reply for a `<tool_call>{...}</tool_call>`, dispatch
+    /// the action via `ActionRegistry`, and return both the user-facing message
+    /// and a status. The floating bar uses the status to pick an icon/color
+    /// (✓ green / ✗ red / ? amber).
+    private func dispatchMacAction(llmReply: String) async -> (message: String, status: MacActionResultStatus) {
+        guard let toolCall = ToolCallParser.parse(llmReply) else {
+            DebugFileLogger.log("macAction: no tool_call in LLM reply: \(llmReply.prefix(120))")
+            return (L("未匹配到操作", "No matching action"), .unsure)
+        }
+        DebugFileLogger.log("macAction: dispatching \(toolCall.name) args=\(toolCall.arguments)")
+        let actionContext = MacActionContext(selectedText: promptContext.selectedText)
+        guard let result = await ActionRegistry.dispatch(
+            name: toolCall.name,
+            args: toolCall.arguments,
+            context: actionContext
+        ) else {
+            DebugFileLogger.log("macAction: unknown action name \(toolCall.name)")
+            return (L("未知操作：\(toolCall.name)", "Unknown action: \(toolCall.name)"), .failure)
+        }
+        if result.success {
+            DebugFileLogger.log("macAction: success \(toolCall.name): \(result.displayMessage)")
+            return (result.displayMessage, .success)
+        } else {
+            DebugFileLogger.log("macAction: failed \(toolCall.name): \(result.errorMessage ?? "")")
+            return (result.errorMessage ?? L("操作失败", "Action failed"), .failure)
+        }
+    }
+
+    /// Persist history, emit floating-bar event + `.completed`, and reset
+    /// session state — the post-LLM finishing path used when Mac Action mode
+    /// dispatched (or attempted to dispatch) an action. This deliberately skips
+    /// the text-injection block that the normal post-LLM path runs.
+    private func completeMacAction(
+        message: String,
+        status: MacActionResultStatus,
+        rawText: String,
+        recordingStartTime: Date?,
+        activeProvider: ASRProvider,
+        myGeneration: UInt64
+    ) async {
+        let recordId = UUID().uuidString
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        let historyStatus: String = {
+            switch status {
+            case .success: return "action_success"
+            case .failure: return "action_failed"
+            case .unsure:  return "action_unmatched"
+            }
+        }()
+        await historyStore.insert(HistoryRecord(
+            id: recordId,
+            createdAt: Date(),
+            durationSeconds: duration,
+            rawText: rawText,
+            processingMode: currentMode.name,
+            processedText: message,
+            finalText: message,
+            status: historyStatus,
+            characterCount: message.count,
+            asrProvider: isManualInput ? "manual" : activeProvider.displayName,
+            asrModel: isManualInput ? nil : currentASRModelLabel(for: activeProvider),
+            llmProvider: historyLLMProvider,
+            llmModel: historyLLMModel,
+            asrDurationSeconds: historyASRDurationSeconds,
+            llmDurationSeconds: historyLLMDurationSeconds,
+            postSnippetText: historySnippetApplication?.text,
+            appliedSnippets: historySnippetApplication?.appliedRules,
+            processingModeId: currentMode.id.uuidString
+        ))
+
+        onASREvent?(.macActionResult(message: message, status: status))
+        onASREvent?(.completed)
+
+        if sessionGeneration == myGeneration, state != .idle {
+            state = .idle
+            hasEmittedReadyForCurrentSession = false
+            currentTranscript = .empty
+            if !isManualInput { warmUpASRConnection() }
+        }
+        resetSessionLLMState()
+        SystemVolumeManager.restore()
+    }
+
+    private func completeSelectionAsk(
+        questionText: String,
+        recordingStartTime: Date?,
+        activeProvider: ASRProvider,
+        myGeneration: UInt64
+    ) async {
+        await resolvePromptContextIfNeeded(generation: myGeneration)
+        guard sessionGeneration == myGeneration else { return }
+
+        let question = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestContext = pendingSelectionAskRequestContext ?? SelectionAskRequestContext(
+            requestID: UUID(),
+            sessionID: nil,
+            turnID: nil,
+            selectedText: "",
+            overridesSelectedText: false,
+            conversationContext: "",
+            contextWasTruncated: false
+        )
+        pendingSelectionAskRequestContext = nil
+        let capturedContextText = SelectionAskPromptBuilder.contextText(from: promptContext)
+        let contextText = requestContext.overridesSelectedText
+            ? requestContext.selectedText
+            : capturedContextText
+        let contextSource: SelectionAskPromptBuilder.ContextSource = contextText.isEmpty ? .none : .selection
+        let conversationContext = requestContext.conversationContext
+        let requestID = requestContext.requestID
+
+        guard !question.isEmpty else {
+            onASREvent?(.selectionAskStarted(
+                requestID: requestID,
+                question: "",
+                selectedText: contextText,
+                contextWasTruncated: false
+            ))
+            onASREvent?(.selectionAskAnswerFailed(
+                requestID: requestID,
+                message: L("没有识别到问题，请重试。", "No question was recognized. Please try again.")
+            ))
+            onASREvent?(.completed)
+            finishSelectionAskSession(myGeneration: myGeneration)
+            return
+        }
+
+        guard let runtime = await resolveLLMRuntime() else {
+            onASREvent?(.selectionAskStarted(
+                requestID: requestID,
+                question: question,
+                selectedText: contextText,
+                contextWasTruncated: false
+            ))
+            onASREvent?(.selectionAskAnswerFailed(
+                requestID: requestID,
+                message: L("请先在设置中配置 LLM。", "Please configure an LLM provider in Settings first.")
+            ))
+            onASREvent?(.completed)
+            finishSelectionAskSession(myGeneration: myGeneration)
+            return
+        }
+
+        let fittedRequest = AskAnythingContextBuilder.fitRequest(
+            selectedText: contextText,
+            conversationText: conversationContext,
+            currentQuestion: question,
+            promptTemplateCharacters: currentMode.prompt.count
+        )
+        state = .postProcessing
+        onASREvent?(.selectionAskStarted(
+            requestID: requestID,
+            question: question,
+            selectedText: contextText,
+            contextWasTruncated: requestContext.contextWasTruncated || fittedRequest.wasTruncated
+        ))
+
+        let llmConfig = runtime.config
+        let client = runtime.client
+        let effectiveContext = PromptContext(selectedText: fittedRequest.selectedText, clipboardText: "")
+        let prompt = SelectionAskPromptBuilder.requestText(
+            mode: currentMode,
+            context: effectiveContext,
+            question: question,
+            conversationContext: fittedRequest.conversationText
+        )
+        DebugFileLogger.log(
+            "selectionAsk LLM request requestID=\(requestID.uuidString) "
+                + "provider=\(KeychainService.selectedLLMProvider.rawValue) "
+                + "model=\(llmConfig.model) contextSource=\(contextSource.rawValue) "
+                + "questionChars=\(question.count) contextChars=\(fittedRequest.selectedText.count) "
+                + "conversationChars=\(fittedRequest.conversationText.count) "
+                + "contextTruncated=\(requestContext.contextWasTruncated || fittedRequest.wasTruncated)"
+        )
+        do {
+            _ = try await client.processStreaming(
+                text: prompt,
+                prompt: "{text}",
+                config: llmConfig,
+                inputBoundary: .inline,
+                invocationContext: LLMInvocationContext(featureSource: .askAnything)
+            ) { [weak self] delta in
+                await self?.emitSelectionAskDelta(delta, requestID: requestID)
+            }
+            onASREvent?(.selectionAskAnswerCompleted(requestID: requestID))
+        } catch {
+            onASREvent?(.selectionAskAnswerFailed(
+                requestID: requestID,
+                message: userFacingLLMError(error)
+            ))
+        }
+
+        onASREvent?(.completed)
+        finishSelectionAskSession(myGeneration: myGeneration)
+    }
+
+    private func emitSelectionAskDelta(_ delta: String, requestID: UUID) {
+        guard !delta.isEmpty else { return }
+        onASREvent?(.selectionAskAnswerDelta(requestID: requestID, delta: delta))
+    }
+
+    private func finishSelectionAskSession(myGeneration: UInt64) {
+        if sessionGeneration == myGeneration, state != .idle {
+            state = .idle
+            hasEmittedReadyForCurrentSession = false
+            currentTranscript = .empty
+            if !isManualInput { warmUpASRConnection() }
+        }
+        resetSessionLLMState()
+        SystemVolumeManager.restore()
+    }
+
+    private func userFacingLLMError(_ error: Error) -> String {
+        if let localized = (error as? LocalizedError)?.errorDescription, !localized.isEmpty {
+            return localized
+        }
+        return error.localizedDescription
+    }
+
+    func stopRecording() async {
+        guard !isManualInput else { return }
+        let myGeneration = sessionGeneration
+        guard state == .recording else {
+            logger.warning("stopRecording called but state is \(String(describing: self.state))")
+            return
+        }
+
+        // Set state BEFORE any await to prevent a second stop from
+        // slipping through the guard during the suspension point.
+        state = .finishing
+        StartSoundRouteGate.shared.disarm(generation: myGeneration)
+        audioStartTimingTracker?.flushRemainingLog()
+        if let translationContext = translationRequestContext,
+           currentMode.id == ProcessingMode.translationModeId {
+            onASREvent?(.processingLabelOverride(L(
+                "正在翻译为\(translationContext.target.displayName)…",
+                "Translating to \(translationContext.target.displayName)…"
+            )))
+        }
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
+
+        let stopT0 = ContinuousClock.now
+        let asrFinishingStartedAt = Date()
+        SystemVolumeManager.restore()
+        SoundFeedback.playStop()
+
+        // Stop capture first so flushRemaining() can emit the tail audio chunk.
+        audioEngine.stop()
+        audioEngine.onAudioChunk = nil
+        let audioUploadDrained = await finishAudioChunkPipeline()
+        DebugFileLogger.log("stop: audio stopped +\(ContinuousClock.now - stopT0)")
+        guard sessionGeneration == myGeneration else {
+            DebugFileLogger.log("stopRecording: zombie after audio pipeline, bailing")
+            return
+        }
+
+        // Quick bail: if mic level never exceeded speech threshold, skip the
+        // full ASR teardown (no speech = nothing to finalize). Saves 2-7s of waiting.
+        if !speechDetected {
+            let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+            DebugFileLogger.log("stop: no speech detected (duration=\(String(format: "%.1f", duration))s), fast exit")
+            if let client = asrClient {
+                await client.disconnect()
+                self.asrClient = nil
+            }
+            eventConsumptionTask?.cancel()
+            eventConsumptionTask = nil
+            if case .revise(let prepared) = recordingPurpose {
+                await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                onASREvent?(.reviseFailed(.instructionEmpty))
+                cleanupSessionAfterRevise(myGeneration: myGeneration)
+                return
+            }
+            onASREvent?(.processingResult(text: ""))
+            onASREvent?(.completed)
+            if sessionGeneration == myGeneration, state != .idle {
+                state = .idle
+                hasEmittedReadyForCurrentSession = false
+                currentTranscript = .empty
+                warmUpASRConnection()
+            }
+            resetSessionLLMState()
+            SystemVolumeManager.restore()
+            return
+        }
+
+        // Two-phase wait: for streaming providers with short recordings and no
+        // streaming text yet, wait briefly for ASR to respond before deciding to skip.
+        // Phase 1: wait up to 1s for any streaming partial text.
+        // Phase 2: if text arrives, endAudio + wait up to 1s for final result.
+        let provider = activeProvider
+        let providerIsStreaming = ASRProviderRegistry.capabilities(for: provider, config: currentConfig).isStreaming
+        let tuning = VolcTuningStorage.effective(for: provider)
+        if providerIsStreaming {
+            let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+            let hasStreamingText = !currentTranscript.composedText
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if duration < 5 && !hasStreamingText {
+                // Phase 1: wait (1s by default) for any streaming text
+                DebugFileLogger.log("stop: short recording (\(String(format: "%.1f", duration))s) with no streaming text, waiting for partial")
+                let gotText = await awaitFirstStreamingText(timeout: .milliseconds(tuning.shortRecordingFirstTextWaitMs))
+
+                if !gotText {
+                    // No streaming text after the wait — likely not real speech, fast exit
+                    DebugFileLogger.log("stop: no streaming text after \(tuning.shortRecordingFirstTextWaitMs)ms wait, fast exit")
+                    if let client = asrClient {
+                        await client.disconnect()
+                        self.asrClient = nil
+                    }
+                    eventConsumptionTask?.cancel()
+                    eventConsumptionTask = nil
+                    if case .revise(let prepared) = recordingPurpose {
+                        await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                        onASREvent?(.reviseFailed(.instructionEmpty))
+                        cleanupSessionAfterRevise(myGeneration: myGeneration)
+                        return
+                    }
+                    onASREvent?(.processingResult(text: ""))
+                    onASREvent?(.completed)
+                    if sessionGeneration == myGeneration, state != .idle {
+                        state = .idle
+                        hasEmittedReadyForCurrentSession = false
+                        currentTranscript = .empty
+                        warmUpASRConnection()
+                    }
+                    resetSessionLLMState()
+                    SystemVolumeManager.restore()
+                    return
+                }
+
+                // Phase 2: streaming text arrived — endAudio + short wait for final
+                DebugFileLogger.log("stop: streaming text arrived, phase 2 teardown +\(ContinuousClock.now - stopT0)")
+                if let client = asrClient {
+                    _ = await withTimeout(.seconds(3)) {
+                        try await client.endAudio()
+                    }
+                    let finalResult = await awaitFinalTranscript(timeout: .milliseconds(tuning.shortRecordingFinalWaitMs))
+                    DebugFileLogger.log("stop: phase 2 done, hasFinal=\(finalResult != nil) +\(ContinuousClock.now - stopT0)")
+
+                    // Drain events + disconnect in background so post-teardown can start
+                    let evtTask = eventConsumptionTask
+                    eventConsumptionTask = nil
+                    asrCleanupTask?.cancel()
+                    asrCleanupGeneration = myGeneration
+                    asrCleanupTask = Task { [weak self, myGeneration] in
+                        if let evtTask { _ = await self?.withTimeout(.seconds(3)) { await evtTask.value } }
+                        // Cancellation means a newer session no longer wants to
+                        // wait for the drain; disconnect is still mandatory so
+                        // the previous client's resources cannot be stranded.
+                        await client.disconnect()
+                        DebugFileLogger.log("stop: phase 2 background cleanup done")
+                        await self?.clearASRCleanupTask(generation: myGeneration)
+                    }
+                    self.asrClient = nil
+                }
+                // Fall through to post-teardown (LLM, inject, etc.)
+                // asrClient is nil → the normal teardown block below is skipped.
+            }
+        }
+
+        var needsLLM = Self.shouldRunInputModeLLM(
+            recordingPurpose: recordingPurpose,
+            mode: currentMode
+        )
+        if cancellationSkipsLLM {
+            needsLLM = false
+            clearHistoryLLMMetadata()
+            DebugFileLogger.log("stop: cancelled output skips LLM")
+        }
+
+
+        // ASR teardown: send endAudio, then wait for the final transcript.
+        // For streaming providers we wait for the precise isFinal signal rather than
+        // draining the entire event stream, so we can fire LLM sooner.
+        var asrTeardownClean = true
+        var endAudioSucceeded = false
+        if let client = asrClient {
+            // Batch clients upload the whole recording here; their HTTP timeout is 120s.
+            let endAudioTimeout: Duration = providerIsStreaming
+                ? .seconds(3)
+                : .seconds(BatchASRHTTP.requestTimeout + 5)
+            let endAudioOK = await withTimeout(endAudioTimeout) {
+                try await client.endAudio()
+            }
+            endAudioSucceeded = endAudioOK
+            if !endAudioOK {
+                DebugFileLogger.log("endAudio timeout or failed")
+                asrTeardownClean = false
+            }
+
+            let finalArrived = providerIsStreaming
+                ? await awaitFinalTranscript(timeout: .milliseconds(tuning.finalWaitMs)) != nil
+                : false
+            let commitWithoutFinal = providerIsStreaming && !finalArrived && tuning.commitOnFinalTimeout
+            if finalArrived || commitWithoutFinal {
+                // Fast path: isFinal arrived (or the tuning panel chose to commit
+                // the current text on timeout). Run drain + disconnect in
+                // background so LLM can start immediately.
+                DebugFileLogger.log(
+                    finalArrived
+                        ? "stop: isFinal received +\(ContinuousClock.now - stopT0)"
+                        : "stop: isFinal timeout after \(tuning.finalWaitMs)ms, committing current text +\(ContinuousClock.now - stopT0)"
+                )
+                var evtTask = eventConsumptionTask
+                if commitWithoutFinal {
+                    // The committed text is final from here on; late server
+                    // updates must not rewrite it while LLM/injection run.
+                    eventConsumptionTask?.cancel()
+                    evtTask = nil
+                }
+                asrCleanupTask?.cancel()
+                asrCleanupGeneration = myGeneration
+                asrCleanupTask = Task { [weak self, myGeneration, evtTask] in
+                    if let evtTask {
+                        _ = await self?.withTimeout(.seconds(3)) { await evtTask.value }
+                    }
+                    // A new recording may cancel this wait, but it must not
+                    // cancel ownership cleanup for the previous ASR client.
+                    await client.disconnect()
+                    DebugFileLogger.log("stop: ASR background cleanup done")
+                    await self?.clearASRCleanupTask(generation: myGeneration)
+                }
+            } else {
+                // Non-streaming or isFinal timeout: fall back to full drain.
+                if providerIsStreaming {
+                    DebugFileLogger.log("stop: isFinal timeout, full drain +\(ContinuousClock.now - stopT0)")
+                }
+                if let evtTask = eventConsumptionTask {
+                    let drainTimeout: Duration = providerIsStreaming ? .seconds(5) : .seconds(5)
+                    let drained = await withTimeout(drainTimeout) {
+                        await evtTask.value
+                    }
+                    if !drained {
+                        DebugFileLogger.log("event stream drain timeout")
+                        asrTeardownClean = false
+                    }
+                }
+                await client.disconnect()
+                eventConsumptionTask?.cancel()
+                DebugFileLogger.log("stop: ASR teardown complete (clean=\(asrTeardownClean)) +\(ContinuousClock.now - stopT0)")
+            }
+        }
+        historyASRDurationSeconds = max(0, Date().timeIntervalSince(asrFinishingStartedAt))
+
+        eventConsumptionTask = nil
+        asrClient = nil
+        hasEmittedReadyForCurrentSession = false
+        guard sessionGeneration == myGeneration else {
+            DebugFileLogger.log("stopRecording: zombie after ASR teardown, bailing")
+            return
+        }
+
+        // Preserve recovery for interrupted uploads, explicit errors and missing
+        // results. A cancelled stream that never produced text is the exception:
+        // after the normal finalization grace, don't replay it solely because the
+        // provider omitted its final event. This is not a general silence detector.
+        let uploadFailed = uploadFailureFlag?.failed == true
+        let hasUsableStreamingResult = !currentTranscript.confirmedSegments.isEmpty
+        let streamingFailed = Self.shouldAttemptBatchFallback(
+            uploadFailed: uploadFailed,
+            asrTeardownClean: asrTeardownClean,
+            streamingError: lastStreamingError
+        )
+        let skipCancelledEmptyRetry = Self.shouldSkipCancelledEmptyRetry(
+            isCancelled: completionIntent == .cancelled,
+            providerIsStreaming: providerIsStreaming,
+            hasReceivedASRText: hasReceivedASRText,
+            audioUploadDrained: audioUploadDrained,
+            endAudioSucceeded: endAudioSucceeded,
+            uploadFailed: uploadFailed,
+            streamingError: lastStreamingError
+        )
+        let needsBatchFallback = streamingFailed
+            && (uploadFailed || lastStreamingError != nil || !hasUsableStreamingResult)
+            && !skipCancelledEmptyRetry
+        if streamingFailed && skipCancelledEmptyRetry {
+            DebugFileLogger.log("stop: cancelled stream stayed empty through finalization; skipping batch fallback")
+            // Whitespace-only provider updates must use the empty-result cleanup
+            // too, without sending blank text to the LLM, clipboard or history.
+            currentTranscript = .empty
+        } else if streamingFailed && !needsBatchFallback {
+            DebugFileLogger.log("stop: drain timeout but streaming has confirmed text, skipping batch fallback")
+        }
+        if needsBatchFallback {
+            let partialText = currentTranscript.composedText
+            DebugFileLogger.log(
+                "stop: streaming failed (partial=\(partialText.count) chars, uploadFailed=\(uploadFailed), hasStreamingError=\(lastStreamingError != nil)), attempting batch fallback"
+            )
+            var fullAudio = audioEngine.getRecordedAudio()
+            #if DEBUG
+            if let recordedAudioForTesting { fullAudio = recordedAudioForTesting }
+            #endif
+            if !fullAudio.isEmpty, let config = currentConfig {
+                onASREvent?(.processingResult(text: partialText.isEmpty ? L("重新识别中...", "Retrying recognition...") : partialText))
+                if let batchText = await attemptBatchFallback(audio: fullAudio, config: config, provider: activeProvider) {
+                    currentTranscript = RecognitionTranscript(
+                        confirmedSegments: [batchText],
+                        partialText: "",
+                        authoritativeText: batchText,
+                        isFinal: true
+                    )
+                    DebugFileLogger.log("stop: batch fallback succeeded, \(batchText.count) chars")
+                } else {
+                    DebugFileLogger.log("stop: batch fallback failed, using partial text")
+                }
+            }
+            historyASRDurationSeconds = max(0, Date().timeIntervalSince(asrFinishingStartedAt))
+        }
+        uploadFailureFlag = nil
+        lastStreamingError = nil
+
+        currentTranscript = Self.resolveEffectiveTranscript(
+            currentTranscript: currentTranscript,
+            providerIsStreaming: providerIsStreaming
+        )
+
+        // Combine confirmed segments + any trailing unconfirmed partial.
+        let effectiveText = currentTranscript.displayText
+        archiveASRSampleIfEnabled(
+            rawText: effectiveText,
+            provider: provider,
+            isStreaming: providerIsStreaming,
+            status: completionIntent == .cancelled
+                ? "cancelled"
+                : (needsBatchFallback ? "batch_fallback" : "completed")
+        )
+        currentConfig = nil
+
+        // The final transcript is available after teardown and any batch fallback.
+        let canFireLLMAtStop = providerIsStreaming && !refreshesIntelliSenseAtProcessing
+        var finalLLMTask: Task<TimedLLMResult, Never>?
+        if needsLLM && canFireLLMAtStop {
+            var finalASRText = effectiveText
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            finalASRText = SnippetStorage.applyEffective(to: finalASRText, bundleId: targetBundleId)
+
+            // Short text exemption: skip LLM for short texts (per-mode threshold)
+            let exemptionThreshold = currentMode.shortTextExemption
+            if exemptionThreshold > 0 && finalASRText.count < exemptionThreshold {
+                DebugFileLogger.log("stop: short text exemption (\(finalASRText.count) < \(exemptionThreshold) chars), skipping LLM")
+                needsLLM = false
+                clearHistoryLLMMetadata()
+                onASREvent?(.useFinishingLabel)
+            }
+
+            DebugFileLogger.log(
+                "stop: needsLLM=\(needsLLM) mode=\(currentMode.name) text=\(finalASRText.count)chars"
+            )
+            if needsLLM && !finalASRText.isEmpty, let runtime = await resolveLLMRuntime() {
+                rememberHistoryLLM(runtime)
+                let llmConfig = runtime.config
+                let prompt = await promptForCurrentMode(text: finalASRText)
+                let inputBoundary = llmInputBoundaryForCurrentMode()
+                let client = runtime.client
+                state = .postProcessing
+                onASREvent?(.enterProcessing)
+                DebugFileLogger.log("stop: final LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalASRText.count) chars +\(ContinuousClock.now - stopT0)")
+                finalLLMTask = Task {
+                    let requestStartedAt = Date()
+                    do {
+                        let result = try await client.process(
+                            text: finalASRText,
+                            prompt: prompt,
+                            config: llmConfig,
+                            inputBoundary: inputBoundary,
+                            invocationContext: self.currentMode.id == ProcessingMode.macActionId
+                                ? LLMInvocationContext(featureSource: .macAction, modeName: self.currentMode.name)
+                                : .dictation(modeName: self.currentMode.name)
+                        )
+                        DebugFileLogger.log("stop: final LLM done \(result.count) chars +\(ContinuousClock.now - stopT0)")
+                        return TimedLLMResult(
+                            text: result,
+                            durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                        )
+                    } catch {
+                        DebugFileLogger.log("stop: final LLM FAILED +\(ContinuousClock.now - stopT0) error=\(error)")
+                        self.setPendingLLMError(error)
+                        return TimedLLMResult(
+                            text: nil,
+                            durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                        )
+                    }
+                }
+            }
+        }
+
+        await finishTextOutput(effectiveText, generation: myGeneration, stopStartedAt: stopT0,
+                               needsLLM: needsLLM, finalLLMTask: finalLLMTask, needsBatchFallback: needsBatchFallback)
+    }
+
+    /// Shared by finalized speech and typed input: prompt expansion, LLM, guarded output and history.
+    private func finishTextOutput(
+        _ effectiveText: String,
+        generation myGeneration: UInt64,
+        stopStartedAt stopT0: ContinuousClock.Instant,
+        needsLLM initialNeedsLLM: Bool,
+        finalLLMTask initialFinalLLMTask: Task<TimedLLMResult, Never>? = nil,
+        needsBatchFallback: Bool = false
+    ) async {
+        var needsLLM = initialNeedsLLM
+        var finalLLMTask = initialFinalLLMTask
+        if !effectiveText.isEmpty {
+            let rawText = effectiveText
+            var finalText = effectiveText
+            var processedText: String? = nil
+            var llmFailed = false
+
+            if case .revise(let prepared) = recordingPurpose {
+                let asrDuration = recordingStartTime.map { Date().timeIntervalSince($0) }
+                await completeRevise(
+                    prepared: prepared,
+                    rawInstruction: rawText,
+                    asrDuration: asrDuration,
+                    myGeneration: myGeneration
+                )
+                return
+            }
+
+            if currentMode.executionKind == .selectionAsk {
+                await completeSelectionAsk(
+                    questionText: rawText,
+                    recordingStartTime: recordingStartTime,
+                    activeProvider: activeProvider,
+                    myGeneration: myGeneration
+                )
+                return
+            }
+
+            if refreshesIntelliSenseAtProcessing, !cancellationSkipsLLM {
+                intelliSenseTarget = currentIntelliSenseTarget()
+            }
+
+            // Apply snippet replacements before LLM (e.g. "我的邮箱" → actual email).
+            // The rules that fired are kept with the history record: once text has been
+            // rewritten nothing downstream can tell a replacement from a misrecognition,
+            // and re-running rules later would describe whatever rules exist by then.
+            // Typed input skips the rules, which is itself a known fact: none fired.
+            let snippetApplication = isManualInput
+                ? SnippetApplication(text: finalText, appliedRules: [])
+                : applyOutputSnippets(
+                    to: finalText,
+                    bundleId: refreshesIntelliSenseAtProcessing
+                        ? intelliSenseTarget?.bundleIdentifier : targetBundleId
+                )
+            finalText = snippetApplication.text
+            historySnippetApplication = snippetApplication
+            var intelliSenseGuardInput = finalText
+
+            if cancellationSkipsLLM {
+                // A cancellation may arrive while ASR teardown is awaiting.
+                // Discard the in-flight LLM result and retain the final ASR text.
+                needsLLM = false
+                finalLLMTask?.cancel()
+                finalLLMTask = nil
+                clearHistoryLLMMetadata()
+                finalText = rawText
+                DebugFileLogger.log("stop: cancellation received before LLM completion, using raw ASR")
+            }
+
+            // Short text exemption (for non-streaming providers, per-mode threshold)
+            if !isManualInput && needsLLM && finalLLMTask == nil && currentMode.shortTextExemption > 0 {
+                let exemptionThreshold = currentMode.shortTextExemption
+                if exemptionThreshold > 0 && finalText.count < exemptionThreshold {
+                    DebugFileLogger.log("stop: short text exemption (\(finalText.count) < \(exemptionThreshold) chars), skipping LLM (sync path)")
+                    needsLLM = false
+                    historyLLMProvider = nil
+                    historyLLMModel = nil
+                    historyLLMDurationSeconds = nil
+                    onASREvent?(.useFinishingLabel)
+                }
+            }
+
+            // LLM post-processing: prefer the task fired at stop time, fall back to a
+            // synchronous call for very short recordings where no streaming text was available yet.
+            if let finalTask = finalLLMTask {
+                state = .postProcessing
+                DebugFileLogger.log("stop: awaiting final LLM result +\(ContinuousClock.now - stopT0)")
+
+                // Timeout: don't wait more than 15s for LLM
+                let finalOutcome: TimedLLMResult = await withCheckedContinuation { continuation in
+                    let finished = OSAllocatedUnfairLock(initialState: false)
+                    Task {
+                        let result = await finalTask.value
+                        if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                            continuation.resume(returning: result)
+                        }
+                    }
+                    Task {
+                        try? await Task.sleep(for: .seconds(15))
+                        if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                            finalTask.cancel()
+                            DebugFileLogger.log("stop: final LLM timeout after 15s, falling back to raw text")
+                            continuation.resume(returning: TimedLLMResult(text: nil, durationSeconds: 15))
+                        }
+                    }
+                }
+                historyLLMDurationSeconds = finalOutcome.durationSeconds
+                let finalResult = finalOutcome.text
+
+                if let result = finalResult, !result.isEmpty {
+                    DebugFileLogger.log("stop: final LLM result received \(result.count) chars +\(ContinuousClock.now - stopT0)")
+                    let cleaned = result
+                    if currentMode.id == ProcessingMode.macActionId {
+                        let action = await dispatchMacAction(llmReply: cleaned)
+                        await completeMacAction(
+                            message: action.message,
+                            status: action.status,
+                            rawText: rawText,
+                            recordingStartTime: recordingStartTime,
+                            activeProvider: activeProvider,
+                            myGeneration: myGeneration
+                        )
+                        return
+                    }
+                    if currentMode.id == ProcessingMode.translationModeId {
+                        do {
+                            let translated = try await resolveTranslationOutputWithRetry(
+                                cleaned,
+                                sourceText: finalText
+                            )
+                            processedText = translated
+                            finalText = translated
+                            onASREvent?(.processingResult(text: translated))
+                        } catch {
+                            if cancellationSkipsLLM {
+                                DebugFileLogger.log(
+                                    "stop: cancelled raw output ignores translation failure"
+                                )
+                            } else {
+                                await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
+                                return
+                            }
+                        }
+                    } else {
+                        let guarded = applyIntelliSenseGuard(
+                            output: cleaned,
+                            input: intelliSenseGuardInput
+                        )
+                        processedText = guarded.rejected ? nil : guarded.text
+                        finalText = guarded.text
+                        onASREvent?(.processingResult(text: guarded.text))
+                    }
+                } else {
+                    let err = pendingLLMError ?? LLMError.emptyResponse(nil)
+                    DebugFileLogger.log("stop: final LLM failed: \(err)")
+                    pendingLLMError = nil
+                    if currentMode.id == ProcessingMode.translationModeId {
+                        if cancellationSkipsLLM {
+                            DebugFileLogger.log(
+                                "stop: cancelled raw output ignores unavailable translation LLM"
+                            )
+                        } else {
+                            await failTranslation(
+                                TranslationError.llmUnavailable,
+                                rawText: rawText,
+                                myGeneration: myGeneration
+                            )
+                            return
+                        }
+                    }
+                    llmFailed = true
+                    onASREvent?(.processingResult(text: rawText))
+                }
+            } else if needsLLM {
+                state = .postProcessing
+                onASREvent?(.enterProcessing)
+                if let runtime = await resolveLLMRuntime() {
+                    if refreshesIntelliSenseAtProcessing, !cancellationSkipsLLM {
+                        await refreshIntelliSenseProcessingContext(generation: myGeneration)
+                        guard sessionGeneration == myGeneration else { return }
+                        // Recompute from the raw transcript for the final processing target.
+                        // Replace the text and its provenance together, even when no rule fires.
+                        let snippetApplication = applyOutputSnippets(
+                            to: effectiveText, bundleId: intelliSenseTarget?.bundleIdentifier
+                        )
+                        finalText = snippetApplication.text
+                        historySnippetApplication = snippetApplication
+                        intelliSenseGuardInput = finalText
+                    }
+                    rememberHistoryLLM(runtime)
+                    let llmConfig = runtime.config
+                    DebugFileLogger.log("stop: sync LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalText.count) chars")
+                    let client = runtime.client
+                    let prompt = await promptForCurrentMode(text: finalText)
+                    let inputBoundary = llmInputBoundaryForCurrentMode()
+                    guard sessionGeneration == myGeneration else { return }
+                    let textForLLM = finalText
+                    let skipsCancelledRequest = cancellationSkipsLLM
+
+                    let requestStartedAt = Date()
+                    let llmOutcome: TimedLLMResult = await withCheckedContinuation { continuation in
+                        let finished = OSAllocatedUnfairLock(initialState: false)
+                        let llmTask = Task {
+                            if skipsCancelledRequest { return TimedLLMResult(text: nil, durationSeconds: 0) }
+                            do {
+                                let result = try await client.process(
+                                    text: textForLLM,
+                                    prompt: prompt,
+                                    config: llmConfig,
+                                    inputBoundary: inputBoundary,
+                                    invocationContext: self.currentMode.id == ProcessingMode.macActionId
+                                        ? LLMInvocationContext(featureSource: .macAction, modeName: self.currentMode.name)
+                                        : .dictation(modeName: self.currentMode.name)
+                                )
+                                return TimedLLMResult(
+                                    text: result.isEmpty ? nil : result,
+                                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                                )
+                            } catch {
+                                DebugFileLogger.log("stop: sync LLM FAILED: \(error)")
+                                return TimedLLMResult(
+                                    text: nil,
+                                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                                )
+                            }
+                        }
+                        Task {
+                            let result = await llmTask.value
+                            if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                                continuation.resume(returning: result)
+                            }
+                        }
+                        Task {
+                            try? await Task.sleep(for: .seconds(15))
+                            if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                                llmTask.cancel()
+                                DebugFileLogger.log("stop: sync LLM timeout after 15s, falling back to raw text")
+                                continuation.resume(returning: TimedLLMResult(text: nil, durationSeconds: 15))
+                            }
+                        }
+                    }
+                    historyLLMDurationSeconds = llmOutcome.durationSeconds
+                    let llmResult = llmOutcome.text
+
+                    if let result = llmResult {
+                        let cleaned = result
+                        if currentMode.id == ProcessingMode.macActionId {
+                            let action = await dispatchMacAction(llmReply: cleaned)
+                            await completeMacAction(
+                                message: action.message,
+                                status: action.status,
+                                rawText: rawText,
+                                recordingStartTime: recordingStartTime,
+                                activeProvider: activeProvider,
+                                myGeneration: myGeneration
+                            )
+                            return
+                        }
+                        if currentMode.id == ProcessingMode.translationModeId {
+                            do {
+                                let translated = try await resolveTranslationOutputWithRetry(
+                                    cleaned,
+                                    sourceText: finalText
+                                )
+                                processedText = translated
+                                finalText = translated
+                                onASREvent?(.processingResult(text: translated))
+                            } catch {
+                                if cancellationSkipsLLM {
+                                    DebugFileLogger.log(
+                                        "stop: cancelled raw output ignores translation failure"
+                                    )
+                                } else {
+                                    await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
+                                    return
+                                }
+                            }
+                        } else {
+                            let guarded = applyIntelliSenseGuard(
+                                output: cleaned,
+                                input: intelliSenseGuardInput
+                            )
+                            processedText = guarded.rejected ? nil : guarded.text
+                            finalText = guarded.text
+                            onASREvent?(.processingResult(text: guarded.text))
+                        }
+                    } else {
+                        if currentMode.id == ProcessingMode.translationModeId {
+                            if cancellationSkipsLLM {
+                                DebugFileLogger.log(
+                                    "stop: cancelled raw output ignores unavailable translation LLM"
+                                )
+                            } else {
+                                await failTranslation(
+                                    TranslationError.llmUnavailable,
+                                    rawText: rawText,
+                                    myGeneration: myGeneration
+                                )
+                                return
+                            }
+                        }
+                        llmFailed = true
+                        onASREvent?(.processingResult(text: rawText))
+                    }
+                } else {
+                    DebugFileLogger.log("stop: no LLM credentials")
+                    if currentMode.id == ProcessingMode.translationModeId {
+                        if cancellationSkipsLLM {
+                            DebugFileLogger.log(
+                                "stop: cancelled raw output ignores unavailable translation LLM"
+                            )
+                        } else {
+                            await failTranslation(
+                                TranslationError.llmUnavailable,
+                                rawText: rawText,
+                                myGeneration: myGeneration
+                            )
+                            return
+                        }
+                    }
+                    llmFailed = true
+                    onASREvent?(.processingResult(text: rawText))
+                }
+            }
+
+            if cancellationSkipsLLM {
+                // A pre-existing LLM request can finish while the user cancels.
+                // Its result is intentionally ignored for raw/never policies.
+                finalText = rawText
+                processedText = nil
+                llmFailed = false
+                clearHistoryLLMMetadata()
+            }
+
+            guard sessionGeneration == myGeneration else { return }
+            finalText = formattedOutputText(finalText)
+            onASREvent?(.willInject)
+
+            state = .injecting
+            let wasCancelled = completionIntent == .cancelled
+            let retainsClipboardResult = clipboardOutputPolicy.retainsResult(
+                forCancellation: wasCancelled
+            )
+            injectionEngine.clipboardRetention = retainsClipboardResult
+                ? .retainResult
+                : .restoreOriginal
+
+            // Run injection on a detached task to avoid blocking the actor with usleep().
+            // .finalized is emitted directly from the detached task so the UI updates
+            // immediately after paste, without waiting for actor re-scheduling.
+            let engine = injectionEngine
+            let onEvent = self.onASREvent
+            let failedLLM = llmFailed
+            let recordId = UUID().uuidString
+            let modeID = currentMode.id
+            let sessionSettings = intelliSenseRequestContext?.settings ?? intelliSenseSettings
+            let contextAvailability = intelliSenseRequestContext?.snapshot.availability
+            let isAutomation = isAutomationTarget
+            let currentFrontmostBundleId = currentIntelliSenseTarget().bundleIdentifier
+            let effectiveTargetBundleId = (!isAutomation && currentFrontmostBundleId != nil)
+                ? currentFrontmostBundleId
+                : targetBundleId
+            let effectiveContextAvailability: ContextAvailability? = {
+                // The snapshot belongs to the processing target, not the recording start.
+                // Dropping a known sensitive snapshot here would permit tracked AX reads.
+                if !isAutomation, let currentFrontmostBundleId,
+                   currentFrontmostBundleId != intelliSenseTarget?.bundleIdentifier {
+                    if sessionSettings?.isBlacklisted(bundleIdentifier: currentFrontmostBundleId) == true {
+                        return .blacklisted
+                    }
+                    return nil
+                }
+                return contextAvailability
+            }()
+            let learningPlan = PostInjectionLearningPlan.resolve(
+                settings: sessionSettings,
+                modeID: modeID,
+                startedModeID: intelliSenseStartedModeID,
+                isCrossModeFallback: intelliSenseCrossModeFallback,
+                aborted: wasCancelled,
+                guardRejected: intelliSenseGuardRejected,
+                contextAvailability: effectiveContextAvailability,
+                targetBundleIdentifier: effectiveTargetBundleId
+            )
+            let baseLearningEligible = !isManualInput && PostInjectionLearningPlan.isBaseEligible(
+                settings: sessionSettings,
+                modeID: modeID,
+                startedModeID: intelliSenseStartedModeID,
+                isCrossModeFallback: intelliSenseCrossModeFallback,
+                aborted: wasCancelled,
+                guardRejected: intelliSenseGuardRejected,
+                contextAvailability: effectiveContextAvailability
+            )
+            let shouldTrackLearning = !isManualInput && learningPlan.shouldTrackInjection
+            let reviseSettings = ReviseSettingsStore.shared.load()
+            let authorizeTrackedCapture = Self.trackedCaptureAuthorization(
+                baseLearningEligible: baseLearningEligible,
+                intelliSenseSettings: sessionSettings,
+                isReviseActive: reviseSettings.enabled && ReviseSettingsStore.isRuntimeEnabled,
+                reviseSettings: reviseSettings
+            )
+            let shouldTrackInjection = authorizeTrackedCapture(effectiveTargetBundleId)
+
+            #if DEBUG
+            if capturesTextOutputForTesting {
+                // Exercise the actual pre-injection decision without touching AX,
+                // the clipboard, or the shared history/learning stores.
+                capturedTextOutputForTesting = (
+                    finalText,
+                    await makeIntelliSenseHistoryTraceJSON(input: rawText, finalText: finalText, processingFailed: llmFailed),
+                    historySnippetApplication,
+                    effectiveContextAvailability,
+                    learningPlan,
+                    shouldTrackLearning
+                )
+                return
+            }
+            #endif
+
+            let targetApp = targetApplication
+            let manualInputHasNoTarget = isManualInput && targetApp == nil
+            let injectLog = "stop: injecting method=clipboard len=\(finalText.count) +\(ContinuousClock.now - stopT0)"
+            let injectionResult: TrackedInjectionResult = await withCheckedContinuation { continuation in
+                Task.detached {
+                    let result: TrackedInjectionResult
+                    if wasCancelled, retainsClipboardResult {
+                        engine.copyToClipboard(finalText)
+                        DebugFileLogger.log("stop: cancelled result retained in clipboard & history")
+                        result = TrackedInjectionResult(
+                            outcome: .copiedToClipboard,
+                            observationContext: nil
+                        )
+                    } else if wasCancelled {
+                        DebugFileLogger.log("stop: cancelled result not retained in clipboard")
+                        result = TrackedInjectionResult(
+                            outcome: .discarded,
+                            observationContext: nil
+                        )
+                    } else {
+                        let plan = manualInputHasNoTarget ? InjectionTargetPlan.failSafeClipboard : RecognitionSession.planInjectionTarget(
+                            isAutomation: isAutomation,
+                            hasCapturedTarget: targetApp != nil,
+                            isTerminated: targetApp?.isTerminated ?? false
+                        )
+                        let allowInjection: Bool
+                        switch plan {
+                        case .injectIntoCurrentFrontmost:
+                            allowInjection = true
+                        case .activateAndConfirm:
+                            allowInjection = targetApp.map(RecognitionSession.activateAndConfirmFrontmost) ?? false
+                        case .failSafeClipboard:
+                            allowInjection = false
+                        }
+                        if allowInjection {
+                            DebugFileLogger.log(injectLog)
+                            if shouldTrackInjection {
+                                result = engine.injectTracked(
+                                    finalText,
+                                    sourceText: rawText,
+                                    sourceRecordID: recordId,
+                                    modeID: modeID,
+                                    shouldCaptureApp: authorizeTrackedCapture
+                                )
+                            } else {
+                                result = TrackedInjectionResult(
+                                    outcome: engine.inject(finalText),
+                                    observationContext: nil
+                                )
+                            }
+                        } else {
+                            // Fail-safe: the intended target is gone or never became
+                            // frontmost, so pasting now could leak the dictated text
+                            // into the wrong app. Retain it in the clipboard instead.
+                            engine.copyToClipboard(finalText)
+                            let reason = plan == .failSafeClipboard
+                                ? "target terminated"
+                                : "target focus unconfirmed"
+                            DebugFileLogger.log("stop: \(reason); retained in clipboard, paste skipped")
+                            result = TrackedInjectionResult(
+                                outcome: .copiedToClipboard,
+                                observationContext: nil
+                            )
+                        }
+                    }
+                    // Notify UI immediately from this thread, before actor resumes
+                    onEvent?(.finalized(text: finalText, injection: result.outcome, llmFailed: failedLLM))
+                    DebugFileLogger.log("stop: finalized emitted from injection task (llmFailed=\(failedLLM))")
+                    // Restoring policies must restore even when there was no
+                    // editable destination, otherwise a failed paste leaks text.
+                    if !retainsClipboardResult && !wasCancelled {
+                        engine.finishClipboardRestore()
+                    }
+                    continuation.resume(returning: result)
+                }
+            }
+
+            #if HAS_CLOUD_SUBSCRIPTION
+            if isCloudMode {
+                Task { await CloudQuotaManager.shared.refresh(force: true) }
+            }
+            #endif
+
+            // Save to history
+            let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+            let status: String
+            if wasCancelled {
+                status = clipboardOutputPolicy.cancelledHistoryStatus
+            }
+            else if llmFailed { status = "llm_error" }
+            else if needsBatchFallback { status = "stream_recovered" }
+            else { status = "completed" }
+            let recordTarget = historyTarget(
+                insertedInto: injectionResult.outcome == .inserted
+                    ? injectionResult.observationContext?.bundleIdentifier : nil
+            )
+            let intelliSenseTraceJSON = await makeIntelliSenseHistoryTraceJSON(
+                input: rawText,
+                finalText: finalText,
+                processingFailed: llmFailed
+            )
+            await historyStore.insert(HistoryRecord(
+                id: recordId,
+                createdAt: Date(),
+                durationSeconds: duration,
+                rawText: rawText,
+                processingMode: currentMode == .direct ? nil : currentMode.name,
+                processedText: processedText,
+                finalText: finalText,
+                status: status,
+                characterCount: finalText.count,
+                asrProvider: isManualInput ? "manual" : activeProvider.displayName,
+                asrModel: isManualInput ? nil : currentASRModelLabel(for: activeProvider),
+                llmProvider: historyLLMProvider,
+                llmModel: historyLLMModel,
+                asrDurationSeconds: historyASRDurationSeconds,
+                llmDurationSeconds: historyLLMDurationSeconds,
+                intelliSenseTraceJSON: intelliSenseTraceJSON,
+                postSnippetText: historySnippetApplication?.text,
+                appliedSnippets: historySnippetApplication?.appliedRules,
+                processingModeId: currentMode.id.uuidString,
+                targetBundleId: recordTarget.bundleId,
+                targetAppName: recordTarget.appName
+            ))
+            if injectionResult.outcome == .inserted,
+               let context = injectionResult.observationContext {
+                let actualBundleID = context.bundleIdentifier
+                let actualAvailability: ContextAvailability? = {
+                    if intelliSenseSettings?.isBlacklisted(bundleIdentifier: actualBundleID) == true {
+                        return .blacklisted
+                    }
+                    if actualBundleID == intelliSenseTarget?.bundleIdentifier {
+                        return contextAvailability
+                    }
+                    return nil
+                }()
+                let effectiveLearningPlan = PostInjectionLearningPlan.resolve(
+                    settings: intelliSenseSettings,
+                    modeID: currentMode.id,
+                    startedModeID: intelliSenseStartedModeID,
+                    isCrossModeFallback: intelliSenseCrossModeFallback,
+                    aborted: wasCancelled,
+                    guardRejected: intelliSenseGuardRejected,
+                    contextAvailability: actualAvailability,
+                    targetBundleIdentifier: actualBundleID
+                )
+                let actualCategory = {
+                    if actualBundleID == intelliSenseTarget?.bundleIdentifier,
+                       let startCategory = intelliSenseRequestContext?.snapshot.appCategory {
+                        return startCategory
+                    }
+                    return AppContextClassifier.classify(
+                        bundleIdentifier: actualBundleID,
+                        appName: nil
+                    )
+                }()
+                let effectiveShouldTrackLearning = !isManualInput && effectiveLearningPlan.shouldTrackInjection
+
+                let sourceKind: ReviseSourceModeKind
+                if currentMode.id == ProcessingMode.intelliSenseId {
+                    sourceKind = .intelliSense
+                } else if currentMode.id == ProcessingMode.translationModeId {
+                    sourceKind = .translation
+                } else if currentMode == .direct {
+                    sourceKind = .direct
+                } else {
+                    sourceKind = .customText
+                }
+                await ReviseCoordinator.shared.registerTarget(
+                    context: context,
+                    sourceModeKind: sourceKind,
+                    learningResumePlan: ReviseLearningResumePlan(shouldResume: effectiveShouldTrackLearning, modeID: currentMode.id)
+                )
+
+                if effectiveShouldTrackLearning {
+                    await MainActor.run {
+                        PostInjectionLearningCoordinator.shared.begin(
+                            context,
+                            options: PostInjectionLearningOptions(
+                                correctionEnabled: effectiveLearningPlan.correctionEnabled,
+                                expressionLearningEnabled: effectiveLearningPlan.expressionLearningEnabled,
+                                appCategory: actualCategory
+                            )
+                        )
+                    }
+                }
+            } else {
+                // A new output that cannot be tracked (AX-blind app, clipboard-only
+                // fallback, or unverifiable range) must invalidate the previous
+                // app's target. Otherwise Revise reports a misleading focus error
+                // and risks carrying stale target identity across applications.
+                await ReviseCoordinator.shared.clearTarget()
+                DebugFileLogger.log("revise_target: cleared reason=untracked_injection")
+            }
+            if !isManualInput { KeychainService.addASRUsage(seconds: duration) }
+
+            // Note: cancellation details are conveyed through InjectionOutcome / completionMessage,
+            // while LLM-failure is conveyed through the .finalized event's llmFailed flag
+            // with a distinct warning presentation instead of a green→red error flash.
+        } else {
+            // No text recognized: skip history entry (don't save empty records)
+            let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+            DebugFileLogger.log("stop: no text recognized (duration=\(duration)s), skipping history entry")
+            if case .revise(let prepared) = recordingPurpose {
+                await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                onASREvent?(.reviseFailed(.instructionEmpty))
+                cleanupSessionAfterRevise(myGeneration: myGeneration)
+                return
+            }
+            onASREvent?(.processingResult(text: ""))
+            onASREvent?(.completed)
+        }
+
+        // Only reset to idle if this is still the active session.
+        if sessionGeneration == myGeneration, state != .idle {
+            state = .idle
+            hasEmittedReadyForCurrentSession = false
+            currentTranscript = .empty
+            // Typed input does not need an ASR connection.
+            if !isManualInput { warmUpASRConnection() }
+        }
+        resetSessionLLMState()
+        SystemVolumeManager.restore()
+        logger.info("Session complete, injected \(effectiveText.count) chars")
+    }
+
+    // MARK: - Stream interruption recovery
+
+    /// Ends the session and hands the server's own message to the UI, using the
+    /// same teardown the other unrecoverable paths use.
+    private func failWithTerminalServerError(_ error: Error) async {
+        guard state != .idle else { return }
+        // Hand the reason over first: the teardown below is unrelated to why the
+        // session ended, and the message is the only actionable part.
+        onASREvent?(.error(error))
+        SoundFeedback.playError()
+        audioEngine.stop()
+        audioEngine.onAudioChunk = nil
+        audioEngine.onAudioLevel = nil
+        if let client = asrClient {
+            await client.disconnect()
+        }
+        asrClient = nil
+        state = .idle
+        hasEmittedReadyForCurrentSession = false
+        onASREvent?(.completed)
+        SystemVolumeManager.restore()
+        clearIntelliSenseSessionContext()
+    }
+
+    private func beginStreamRecovery(trigger: String) async {
+        guard state == .recording else {
+            DebugFileLogger.log("recovery ignored: state=\(state) trigger=\(trigger)")
+            return
+        }
+
+        let myGeneration = sessionGeneration
+        let provider = activeProvider
+        let config = currentConfig
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        let rawPartialText = currentTranscript.displayText
+        let partialText = normalizedRecoveryText(rawPartialText)
+        let asrModel = currentASRModelLabel(for: provider)
+
+        DebugFileLogger.log("recovery started trigger=\(trigger) partial=\(partialText.count) chars")
+        state = .recovering
+        recoveryInterruptPromptShown = false
+        recoveryRecordId = UUID().uuidString
+        recoveryCreatedAt = Date()
+        recoveryRawPartialText = rawPartialText
+        recoveryPartialText = partialText
+        recoveryDuration = duration
+        recoveryModeName = currentMode == .direct ? nil : currentMode.name
+        recoveryModeId = currentMode.id.uuidString
+        recoveryTarget = historyTarget()
+        recoveryProvider = provider
+        recoveryASRModel = asrModel
+
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
+        SystemVolumeManager.restore()
+
+        audioEngine.stop()
+        audioEngine.onAudioChunk = nil
+        audioEngine.onAudioLevel = nil
+        await finishAudioChunkPipeline(timeout: .milliseconds(250))
+        let fullAudio = audioEngine.getRecordedAudio()
+
+        eventConsumptionTask?.cancel()
+        eventConsumptionTask = nil
+        if let client = asrClient {
+            Task.detached { await client.disconnect() }
+        }
+        asrClient = nil
+        uploadFailureFlag = nil
+        lastStreamingError = nil
+
+        if !recoveryPartialText.isEmpty {
+            await saveRecoveryHistory(status: "stream_partial_saved", finalText: recoveryPartialText)
+            injectRecoveryPartial(recoveryPartialText)
+        }
+
+        onASREvent?(.recoveryStarted(
+            text: partialText,
+            message: L(
+                "连接中断，已保留当前文字，正在用整段录音重试",
+                "Connection interrupted. Current text was saved; retrying with the full recording."
+            )
+        ))
+
+        guard sessionGeneration == myGeneration, state == .recovering else { return }
+        guard !fullAudio.isEmpty, let config else {
+            await finishRecovery(
+                recoveredText: nil,
+                generation: myGeneration,
+                failureMessage: L(
+                    "连接中断，已保留部分识别结果",
+                    "Connection interrupted. Partial recognition was saved."
+                )
+            )
+            return
+        }
+
+        recoveryTask?.cancel()
+        recoveryTask = Task {
+            let recovered = await self.attemptBatchFallback(
+                audio: fullAudio,
+                config: config,
+                provider: provider
+            )
+            self.archiveASRSampleIfEnabled(
+                pcm: fullAudio,
+                rawText: recovered ?? rawPartialText,
+                provider: provider,
+                isStreaming: ASRProviderRegistry.capabilities(for: provider, config: config).isStreaming,
+                status: "stream_recovery"
+            )
+            await self.finishRecovery(
+                recoveredText: recovered,
+                generation: myGeneration,
+                failureMessage: L(
+                    "连接中断，已保留部分识别结果",
+                    "Connection interrupted. Partial recognition was saved."
+                )
+            )
+        }
+    }
+
+    private func finishRecovery(
+        recoveredText: String?,
+        generation: UInt64,
+        failureMessage: String
+    ) async {
+        guard state == .recovering, generation == sessionGeneration, !Task.isCancelled else {
+            return
+        }
+
+        let recovered = recoveredText.map(normalizedRecoveryText)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let recovered, !recovered.isEmpty {
+            if clipboardOutputPolicy.retainsNormalResult {
+                injectionEngine.copyToClipboard(recovered)
+            }
+            currentTranscript = RecognitionTranscript(
+                confirmedSegments: [recovered],
+                partialText: "",
+                authoritativeText: recovered,
+                isFinal: true
+            )
+            await saveRecoveryHistory(status: "stream_recovered", finalText: recovered)
+            KeychainService.addASRUsage(seconds: recoveryDuration)
+            onASREvent?(.recoverySucceeded(
+                text: recovered,
+                message: L("已恢复完整识别", "Full recognition recovered")
+            ))
+            DebugFileLogger.log("recovery succeeded \(recovered.count) chars")
+        } else {
+            if !recoveryPartialText.isEmpty {
+                await saveRecoveryHistory(status: "stream_partial_saved", finalText: recoveryPartialText)
+                KeychainService.addASRUsage(seconds: recoveryDuration)
+            }
+            onASREvent?(.recoveryFailed(text: recoveryPartialText, message: failureMessage))
+            DebugFileLogger.log("recovery failed, partial=\(recoveryPartialText.count) chars")
+        }
+
+        clearRecoveryState()
+        state = .idle
+        currentTranscript = .empty
+        resetSessionLLMState()
+        SystemVolumeManager.restore()
+        warmUpASRConnection()
+    }
+
+    private func normalizedRecoveryText(_ text: String) -> String {
+        formattedOutputText(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func formattedOutputText(_ text: String) -> String {
+        Self.formattedOutputText(text, mode: currentMode)
+    }
+
+    private func injectRecoveryPartial(_ text: String) {
+        let engine = injectionEngine
+        let retainsClipboardResult = clipboardOutputPolicy.retainsNormalResult
+        Task.detached {
+            engine.clipboardRetention = retainsClipboardResult
+                ? .retainResult
+                : .restoreOriginal
+            _ = engine.inject(text)
+            if !retainsClipboardResult {
+                engine.finishClipboardRestore()
+            }
+        }
+    }
+
+    private func saveRecoveryHistory(status: String, finalText: String) async {
+        let recordId = recoveryRecordId ?? UUID().uuidString
+        recoveryRecordId = recordId
+        await historyStore.insert(HistoryRecord(
+            id: recordId,
+            createdAt: recoveryCreatedAt ?? Date(),
+            durationSeconds: recoveryDuration,
+            rawText: recoveryRawPartialText,
+            processingMode: recoveryModeName,
+            processedText: nil,
+            finalText: finalText,
+            status: status,
+            characterCount: finalText.count,
+            asrProvider: recoveryProvider.displayName,
+            asrModel: recoveryASRModel,
+            processingModeId: recoveryModeId,
+            targetBundleId: recoveryTarget.bundleId,
+            targetAppName: recoveryTarget.appName
+        ))
+    }
+
+    private func clearRecoveryState() {
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        recoveryInterruptPromptShown = false
+        recoveryRecordId = nil
+        recoveryCreatedAt = nil
+        recoveryRawPartialText = ""
+        recoveryPartialText = ""
+        recoveryDuration = 0
+        recoveryModeName = nil
+        recoveryModeId = nil
+        recoveryTarget = (nil, nil)
+        recoveryProvider = .volcano
+        recoveryASRModel = nil
+        currentConfig = nil
+    }
+
+    // MARK: - ASR Events
+
+    private func handleASREvent(_ event: RecognitionEvent, expectedGeneration: UInt64) {
+        guard expectedGeneration == sessionGeneration else {
+            DebugFileLogger.log("ignoring stale ASR event for gen=\(expectedGeneration), active=\(sessionGeneration)")
+            return
+        }
+        switch event {
+        case .ready:
+            // Deduplicate: ASR clients may emit .ready, but we also emit it
+            // on first audio chunk via markReadyIfNeeded(). Route both through
+            // the same guard to avoid double-firing the start sound.
+            markReadyIfNeeded()
+            return  // markReadyIfNeeded calls onASREvent internally
+        case .sessionReady:
+            return
+        default:
+            break
+        }
+
+        // Notify UI layer for all non-ready events. Streaming errors during
+        // recording become recoverable interruptions, not red error toasts.
+        if case .error = event, state == .recording {
+            // beginStreamRecovery surfaces the user-facing state.
+        } else {
+            onASREvent?(event)
+        }
+
+        switch event {
+        case .ready, .sessionReady:
+            break  // handled above
+        case .transcript(let transcript):
+            currentTranscript = transcript
+            let trimmedDisplay = transcript.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedComposed = transcript.composedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isPlaceholder = ASRRecognitionMode.isBatchRecordingPlaceholder(trimmedDisplay)
+                || ASRRecognitionMode.isBatchRecordingPlaceholder(trimmedComposed)
+            if !isPlaceholder {
+                if !trimmedDisplay.isEmpty || !trimmedComposed.isEmpty {
+                    hasReceivedASRText = true
+                }
+                if !trimmedDisplay.isEmpty {
+                    speechDetected = true
+                    if let cont = firstStreamingTextCont {
+                        firstStreamingTextCont = nil
+                        firstStreamingTextTimeoutTask?.cancel()
+                        firstStreamingTextTimeoutTask = nil
+                        cont.resume(returning: true)
+                    }
+                }
+            }
+            if let cont = finalTranscriptCont, isTranscriptEffectivelyFinal {
+                finalTranscriptCont = nil
+                finalTranscriptTimeoutTask?.cancel()
+                finalTranscriptTimeoutTask = nil
+                cont.resume(returning: transcript.displayText)
+            }
+            logger.info("Transcript updated: \(transcript.displayText)")
+
+        case .error(let error):
+            lastStreamingError = error
+            logger.error("ASR error: \(error)")
+            if (error as? TerminalASRError)?.isTerminalServerError == true {
+                // Quota, billing, auth and rate limiting are verdicts about the
+                // account, not a dropped connection. Recovery would retry the
+                // same provider until it gives up and would replace the server's
+                // wording with a generic interruption notice, which is exactly
+                // how an exhausted quota looked like a recording that stopped by
+                // itself (issue #290).
+                DebugFileLogger.log("terminal ASR server error, skipping recovery: \(error)")
+                Task { await self.failWithTerminalServerError(error) }
+            } else if state == .recording {
+                Task { await self.beginStreamRecovery(trigger: "ASR error: \(error)") }
+            }
+
+        case .completed:
+            logger.info("ASR stream completed")
+            // Server signaled end-of-stream (e.g. Volcano 0xF0). If we're waiting
+            // for a final transcript, resume now — currentTranscript contains the
+            // last update the server sent before closing.
+            if let cont = finalTranscriptCont {
+                finalTranscriptCont = nil
+                finalTranscriptTimeoutTask?.cancel()
+                finalTranscriptTimeoutTask = nil
+                let text = currentTranscript.displayText
+                DebugFileLogger.log("stop: .completed resumed finalTranscriptCont (\(text.count) chars)")
+                cont.resume(returning: text.isEmpty ? nil : text)
+            }
+            if state == .recording {
+                if lastStreamingError != nil || uploadFailureFlag?.failed == true {
+                    NSLog("[Session] Server closed ASR after interruption, initiating recovery")
+                    DebugFileLogger.log("server completed after streaming interruption")
+                    Task { await self.beginStreamRecovery(trigger: "ASR completed after interruption") }
+                } else if activeProvider != .grok {
+                    NSLog("[Session] Server closed ASR while recording, initiating stop")
+                    DebugFileLogger.log("server-initiated stop from recording state")
+                    Task {
+                        await self.stopRecording()
+                    }
+                }
+            }
+
+        case .processingResult, .processingLabelOverride, .recoveryStarted,
+             .recoveryPrompt, .recoverySucceeded, .recoveryFailed,
+             .recoveryInterrupted, .finalized, .macActionResult,
+             .selectionAskStarted, .selectionAskAnswerDelta,
+             .selectionAskAnswerCompleted, .selectionAskAnswerFailed,
+             .reviseProcessing, .reviseCompleted, .reviseFailed,
+             .reviseCancelled, .reviseUndone, .finishHint, .useFinishingLabel, .willInject, .enterProcessing:
+            break
+        }
+    }
+
+    // MARK: - Soniox punctuation helpers
+
+    private static let sonioxPunctuationPrompt = """
+    为以下语音识别文本添加标点符号并修正空格。规则:
+    1. 根据语义添加合适的标点
+    2. 去掉中文之间不必要的空格，中英文之间保留一个空格
+    3. 不改任何文字内容
+    4. 直接返回结果
+    {text}
+    """
+
+    private static let chinesePunctuationSet: Set<Character> = [
+        "\u{3002}", "\u{FF0C}", "\u{3001}", "\u{FF1B}", "\u{FF1A}",  // 。，、；：
+        "\u{FF01}", "\u{FF1F}", "\u{2026}", "\u{2014}", "\u{00B7}",  // ！？…—·
+        "\u{201C}", "\u{201D}", "\u{2018}", "\u{2019}",              // ""''
+        "\u{FF08}", "\u{FF09}", "\u{3010}", "\u{3011}",              // （）【】
+        "\u{300A}", "\u{300B}",                                       // 《》
+    ]
+
+    private static func stripChinesePunctuation(_ text: String) -> String {
+        var result = ""
+        var skipSpaces = false
+        for char in text {
+            if chinesePunctuationSet.contains(char) {
+                skipSpaces = true
+                continue
+            }
+            if skipSpaces && char == " " {
+                continue
+            }
+            skipSpaces = false
+            result.append(char)
+        }
+        return result
+    }
+
+    // MARK: - Internal helpers
+
+    /// Saves the full recording and the untouched ASR text for offline ASR
+    /// evaluation when the user enabled it in General settings. The disk write
+    /// runs off the session actor so finishing the dictation never waits on it.
+    private func archiveASRSampleIfEnabled(
+        pcm: Data? = nil,
+        rawText: String,
+        provider: ASRProvider,
+        isStreaming: Bool,
+        status: String
+    ) {
+        guard ASRSampleArchive.isEnabled, !isManualInput else { return }
+        let audio = pcm ?? audioEngine.getRecordedAudio()
+        guard !audio.isEmpty else { return }
+
+        let purpose: String
+        if case .revise = recordingPurpose {
+            purpose = "revise"
+        } else if currentMode.executionKind == .selectionAsk {
+            purpose = "selection_ask"
+        } else {
+            purpose = "input"
+        }
+        let sample = ASRSampleArchive.Sample(
+            pcm: audio,
+            rawText: rawText,
+            provider: provider,
+            asrModel: currentASRModelLabel(for: provider),
+            isStreaming: isStreaming,
+            status: status,
+            purpose: purpose,
+            processingModeId: currentMode.id.uuidString,
+            processingModeName: currentMode.name
+        )
+        Task.detached(priority: .utility) {
+            await ASRSampleArchive.shared.save(sample)
+        }
+    }
+
+    private func setupAudioChunkPipeline() -> AsyncStream<Data>.Continuation {
+        audioChunkContinuation?.finish()
+        audioChunkSenderTask?.cancel()
+
+        let (stream, continuation) = AsyncStream<Data>.makeStream()
+        audioChunkContinuation = continuation
+
+        // Capture everything needed for sending so the Task body
+        // does NOT hop back to the actor.  This prevents a blocking
+        // WebSocket send from starving stopRecording().
+        let client = asrClient
+        let audioInput = ASRProviderRegistry.capabilities(for: activeProvider, config: currentConfig).audioInput
+
+        let failureFlag = UploadFailureFlag()
+        self.uploadFailureFlag = failureFlag
+
+        audioChunkSenderTask = Task.detached {
+            var chunkCount = 0
+            var lastLogTime: ContinuousClock.Instant?
+            for await data in stream {
+                guard let client else { break }
+                let t0 = ContinuousClock.now
+                do {
+                    switch audioInput {
+                    case .pcmData:
+                        try await client.sendAudio(data)
+                    case .pcmBuffer:
+                        guard let buffer = AudioCaptureEngine.makePCMBuffer(from: data) else { continue }
+                        try await client.sendAudioBuffer(buffer)
+                    }
+                } catch {
+                    DebugFileLogger.log("audio chunk send failed: \(error)")
+                    failureFlag.failed = true
+                    Task { await self.beginStreamRecovery(trigger: "audio chunk send failed: \(error)") }
+                    // If send fails, stop pumping — connection is dead.
+                    break
+                }
+                let elapsed = ContinuousClock.now - t0
+                chunkCount += 1
+                let shouldLog = chunkCount % 50 == 0
+                    || elapsed > .milliseconds(200)
+                    || lastLogTime == nil
+                if shouldLog {
+                    DebugFileLogger.log("audio chunk #\(chunkCount) sent \(data.count)B in \(elapsed)")
+                    lastLogTime = ContinuousClock.now
+                }
+            }
+        }
+        return continuation
+    }
+
+    @discardableResult
+    private func finishAudioChunkPipeline(timeout: Duration = .seconds(1)) async -> Bool {
+        audioChunkContinuation?.finish()
+        audioChunkContinuation = nil
+
+        // Give the detached sender a brief window to drain remaining chunks
+        // (especially the tail audio from flushRemaining). Since it's detached,
+        // this wait does NOT block the actor.
+        guard let senderTask = audioChunkSenderTask else { return true }
+        let drained = await withTimeout(timeout) {
+            await senderTask.value
+        }
+        if !drained {
+            senderTask.cancel()
+            DebugFileLogger.log("audio chunk pipeline drain timeout; sender cancelled")
+        }
+        audioChunkSenderTask = nil
+        return drained
+    }
+
+    private func markReadyIfNeeded() {
+        guard !hasEmittedReadyForCurrentSession else { return }
+        hasEmittedReadyForCurrentSession = true
+        recordingStartTime = Date()
+        let gen = sessionGeneration
+        DebugFileLogger.log("session emitting ready gen=\(gen)")
+        audioStartTimingTracker?.recordReady(at: .now)
+        onASREvent?(.sessionReady(generation: gen))
+        logger.info("Recording started")
+    }
+
+
+
+    private func rememberHistoryLLM(_ runtime: ResolvedLLMRuntime) {
+        let provider = runtime.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = runtime.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        historyLLMProvider = provider.isEmpty ? nil : String(provider.prefix(80))
+        historyLLMModel = model.isEmpty ? nil : String(model.prefix(160))
+    }
+
+
+    /// The clipboard policy applies only to text modes that ultimately target
+    /// another application. Ask Anything, Revise and Mac Action keep their
+    /// own cancellation semantics.
+    private var usesClipboardOutputPolicy: Bool {
+        guard case .input = recordingPurpose else { return false }
+        return currentMode.supportsOutputFormatting
+    }
+
+    private var cancellationSkipsLLM: Bool {
+        usesClipboardOutputPolicy
+            && completionIntent == .cancelled
+            && !clipboardOutputPolicy.processesCancelledResult
+    }
+
+
+    private func clearHistoryLLMMetadata() {
+        historyLLMProvider = nil
+        historyLLMModel = nil
+        historyLLMDurationSeconds = nil
+    }
+
+    private func setPendingLLMError(_ error: Error) {
+        pendingLLMError = error
+    }
+
+    private func applyIntelliSenseGuard(
+        output: String,
+        input: String
+    ) -> (text: String, rejected: Bool) {
+        guard currentMode.id == ProcessingMode.intelliSenseId else {
+            return (output, false)
+        }
+        let result = IntelliSenseOutputValidator.process(
+            input: input,
+            candidate: output,
+            context: intelliSenseRequestContext?.snapshot
+        )
+        intelliSenseLastProcessingResult = result
+        DebugFileLogger.log(
+            "intelli sense validation candidateLength=\(output.count) finalLength=\(result.finalText.count) correction=\(result.correctionAnalysis.containsExplicitCorrection)"
+        )
+        switch result.decision {
+        case .accept:
+            return (result.finalText, false)
+        case .acceptWithWarnings(let warnings):
+            DebugFileLogger.log(
+                "intelli sense guard warnings=\(warnings.map(\.rawValue).joined(separator: ","))"
+            )
+            return (result.finalText, false)
+        case .reject(let reason):
+            intelliSenseGuardRejected = true
+            DebugFileLogger.log("intelli sense guard rejected reason=\(reason.rawValue)")
+            return (result.finalText, true)
+        }
+    }
+
+    private func llmInputBoundaryForCurrentMode() -> LLMInputBoundary {
+        guard currentMode.id == ProcessingMode.formalWritingId else {
+            return .inline
+        }
+        return .isolatedTranscript(LLMInputContext(
+            prompt: currentMode.prompt,
+            selectedText: promptContext.selectedText,
+            clipboardText: promptContext.clipboardText
+        ))
+    }
+
+    private func promptForCurrentMode(text: String? = nil) async -> String {
+        await resolvePromptContextIfNeeded(generation: sessionGeneration)
+
+        if currentMode.id == ProcessingMode.translationModeId,
+           let context = translationRequestContext,
+           context.generation == sessionGeneration {
+            return context.prompt
+        }
+        guard currentMode.id == ProcessingMode.intelliSenseId else {
+            if currentMode.id == ProcessingMode.formalWritingId {
+                return promptContext.expandTrustedContextVariables(currentMode.prompt)
+            }
+            return promptContext.expandContextVariables(currentMode.prompt)
+        }
+        if intelliSenseCrossModeFallback {
+            return IntelliSensePromptBuilder.baseTemplate
+        }
+        if let context = intelliSenseRequestContext,
+           context.generation == sessionGeneration {
+            return IntelliSensePromptBuilder.build(request: IntelliSenseRequest(
+                text: text ?? "",
+                context: context.snapshot,
+                settings: context.settings,
+                expressionProfile: context.expressionProfile
+            ))
+        }
+
+        let settings: IntelliSenseSettings
+        if let intelliSenseSettings {
+            settings = intelliSenseSettings
+        } else {
+            settings = await IntelliSenseSettingsStore.shared.load()
+        }
+        let snapshot: IntelliSenseContextSnapshot
+        if let task = intelliSenseContextTask {
+            snapshot = await task.value
+        } else if let target = intelliSenseTarget {
+            snapshot = .appOnly(target)
+        } else {
+            snapshot = .appOnly(TargetApplicationContext(
+                processIdentifier: nil,
+                bundleIdentifier: targetBundleId,
+                displayName: nil
+            ))
+        }
+        guard intelliSenseStartedModeID == ProcessingMode.intelliSenseId else {
+            return IntelliSensePromptBuilder.baseTemplate
+        }
+        let expressionProfile: EffectiveExpressionProfile?
+        if settings.expressionLearningEnabled,
+           snapshot.availability != .blacklisted,
+           snapshot.availability != .sensitive {
+            expressionProfile = await ExpressionProfileStore.shared.effectiveProfile(
+                bundleIdentifier: snapshot.bundleIdentifier,
+                category: snapshot.appCategory
+            )
+        } else {
+            expressionProfile = nil
+        }
+        DebugFileLogger.log(
+            "intelli sense context app=\(snapshot.appCategory.rawValue) control=\(snapshot.controlCategory.rawValue) availability=\(snapshot.availability.rawValue) beforeLength=\(snapshot.contextBeforeCursor.count) afterLength=\(snapshot.contextAfterCursor.count) truncated=\(snapshot.wasTruncated) layers=app:\(settings.applicationAwarenessEnabled),context:\(settings.contextAwarenessEnabled),expression:\(settings.expressionLearningEnabled),correction:\(settings.correctionDetectionEnabled) profileScope=\(expressionProfile?.sourceScope ?? "none") profileDirectives=\(expressionProfile?.directives.count ?? 0)"
+        )
+        intelliSenseRequestContext = IntelliSenseRequestContext(
+            settings: settings,
+            snapshot: snapshot,
+            expressionProfile: expressionProfile,
+            startingModeID: ProcessingMode.intelliSenseId,
+            generation: sessionGeneration
+        )
+        return IntelliSensePromptBuilder.build(request: IntelliSenseRequest(
+            text: text ?? "",
+            context: snapshot,
+            settings: settings,
+            expressionProfile: expressionProfile
+        ))
+    }
+
+    private func applyOutputSnippets(to text: String, bundleId: String?) -> SnippetApplication {
+        #if DEBUG
+        if let applySnippetsForTesting { return applySnippetsForTesting(text, bundleId) }
+        #endif
+        return SnippetStorage.applyEffectiveTracking(to: text, bundleId: bundleId)
+    }
+
+    private var refreshesIntelliSenseAtProcessing: Bool {
+        currentMode.id == ProcessingMode.intelliSenseId
+            && intelliSenseStartedModeID == ProcessingMode.intelliSenseId
+            && !intelliSenseCrossModeFallback && !isAutomationTarget && !isManualInput
+    }
+
+    private func currentIntelliSenseTarget() -> TargetApplicationContext {
+        #if DEBUG
+        if let targetForTesting { return targetForTesting() }
+        #endif
+        let app = NSWorkspace.shared.frontmostApplication
+        return TargetApplicationContext(
+            processIdentifier: app?.processIdentifier,
+            bundleIdentifier: app?.bundleIdentifier,
+            displayName: app?.localizedName
+        )
+    }
+
+    private func refreshIntelliSenseProcessingContext(generation: UInt64) async {
+        guard let settings = intelliSenseSettings else { return }
+        var target = currentIntelliSenseTarget()
+        var snapshot: IntelliSenseContextSnapshot
+        #if DEBUG
+        if let captureContextForTesting {
+            snapshot = await captureContextForTesting(target, settings)
+        } else {
+            snapshot = await IntelliSenseContextCapturer.capture(target: target, settings: settings)
+        }
+        #else
+        snapshot = await IntelliSenseContextCapturer.capture(target: target, settings: settings)
+        #endif
+        guard sessionGeneration == generation else { return }
+        // AX capture can take up to 300 ms. If the app changed meanwhile, discard
+        // its text and use the new app's scene rather than chase focus or delay LLM.
+        let currentTarget = currentIntelliSenseTarget()
+        if currentTarget.processIdentifier != target.processIdentifier
+            || currentTarget.bundleIdentifier != target.bundleIdentifier {
+            target = currentTarget
+            snapshot = .appOnly(target)
+            if settings.isBlacklisted(bundleIdentifier: target.bundleIdentifier) {
+                snapshot.availability = .blacklisted
+            }
+        }
+        intelliSenseContextTask?.cancel()
+        intelliSenseTarget = target
+        intelliSenseContextTask = Task { snapshot }
+        intelliSenseRequestContext = nil
+        intelliSenseLastProcessingResult = nil
+        intelliSenseGuardRejected = false
+        DebugFileLogger.log("intelli sense processing context refreshed bundle=\(target.bundleIdentifier ?? "none")")
+    }
+
+    private func clearIntelliSenseSessionContext() {
+        intelliSenseContextTask?.cancel()
+        intelliSenseContextTask = nil
+        intelliSenseRequestContext = nil
+        intelliSenseSettings = nil
+        intelliSenseTarget = nil
+        intelliSenseStartedModeID = nil
+        intelliSenseCrossModeFallback = false
+        intelliSenseGuardRejected = false
+        intelliSenseLastProcessingResult = nil
+    }
+
+    private func clearTranslationSessionContext() {
+        translationRequestContext = nil
+    }
+
+    private func resolveTranslationOutputWithRetry(
+        _ candidate: String,
+        sourceText: String
+    ) async throws -> String {
+        guard let context = translationRequestContext,
+              context.generation == sessionGeneration else {
+            throw TranslationError.llmUnavailable
+        }
+
+        let initialDecision = TranslationOutputValidator.production.validate(
+            candidate,
+            target: context.target
+        )
+        switch translationValidationAction(
+            initialDecision,
+            attempt: .initial,
+            target: context.target
+        ) {
+        case .accept:
+            return candidate
+        case .reject(let failure):
+            throw translationError(for: failure, target: context.target)
+        case .retry:
+            break
+        }
+
+        guard let runtime = await resolveLLMRuntime() else {
+            throw TranslationError.llmUnavailable
+        }
+        rememberHistoryLLM(runtime)
+        let retryPrompt = TranslationPromptBuilder.retryPrompt(target: context.target)
+        DebugFileLogger.log(
+            "translation retry started reason=unexpectedLanguage target=\(context.target.rawValue) model=\(runtime.config.model) input=\(sourceText.count)chars"
+        )
+        let retryOutcome = await performTranslationRetry(
+            text: sourceText,
+            prompt: retryPrompt,
+            runtime: runtime
+        )
+        historyLLMDurationSeconds = (historyLLMDurationSeconds ?? 0)
+            + retryOutcome.durationSeconds
+        guard let retryResult = retryOutcome.text else {
+            throw TranslationError.llmUnavailable
+        }
+
+        let cleanedRetry = retryResult
+        let retryDecision = TranslationOutputValidator.production.validate(
+            cleanedRetry,
+            target: context.target
+        )
+        switch translationValidationAction(
+            retryDecision,
+            attempt: .retry,
+            target: context.target
+        ) {
+        case .accept:
+            DebugFileLogger.log(
+                "translation retry completed decision=accept target=\(context.target.rawValue) chars=\(cleanedRetry.count)"
+            )
+            return cleanedRetry
+        case .retry:
+            assertionFailure("Retry validation must not request another retry")
+            throw TranslationError.unexpectedLanguage(context.target)
+        case .reject(let failure):
+            throw translationError(for: failure, target: context.target)
+        }
+    }
+
+    private func translationValidationAction(
+        _ decision: TranslationValidationDecision,
+        attempt: TranslationValidationAttempt,
+        target: TranslationLanguage
+    ) -> TranslationValidationAction {
+        let action = TranslationValidationPolicy.action(for: decision, attempt: attempt)
+        switch (decision, action) {
+        case (.accept, .accept):
+            DebugFileLogger.log(
+                "translation validation decision=accept target=\(target.rawValue) attempt=\(String(describing: attempt))"
+            )
+        case (.acceptWithWarning(let warning), .accept):
+            DebugFileLogger.log(
+                "translation validation decision=warning target=\(target.rawValue) attempt=\(String(describing: attempt)) warning=\(String(describing: warning))"
+            )
+        case (.acceptWithWarning(let warning), .retry):
+            DebugFileLogger.log(
+                "translation validation decision=retry target=\(target.rawValue) warning=\(String(describing: warning))"
+            )
+        case (_, .reject(let failure)):
+            DebugFileLogger.log(
+                "translation validation decision=reject target=\(target.rawValue) attempt=\(String(describing: attempt)) failure=\(String(describing: failure))"
+            )
+        default:
+            break
+        }
+        return action
+    }
+
+    private func translationError(
+        for failure: TranslationValidationFailure,
+        target: TranslationLanguage
+    ) -> TranslationError {
+        switch failure {
+        case .emptyOutput:
+            return .emptyOutput
+        case .unsafeStructure:
+            return .unsafeOutput
+        case .unexpectedLanguage:
+            return .unexpectedLanguage(target)
+        }
+    }
+
+    private func performTranslationRetry(
+        text: String,
+        prompt: String,
+        runtime: ResolvedLLMRuntime
+    ) async -> TimedLLMResult {
+        let requestStartedAt = Date()
+        return await withCheckedContinuation { continuation in
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            let retryTask = Task {
+                do {
+                    let result = try await runtime.client.process(
+                        text: text,
+                        prompt: prompt,
+                        config: runtime.config,
+                        inputBoundary: .inline,
+                        invocationContext: .dictation(modeName: self.currentMode.name)
+                    )
+                    DebugFileLogger.log(
+                        "translation retry response chars=\(result.count) model=\(runtime.config.model)"
+                    )
+                    return TimedLLMResult(
+                        text: result,
+                        durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                    )
+                } catch {
+                    DebugFileLogger.log("translation retry failed error=\(error)")
+                    return TimedLLMResult(
+                        text: nil,
+                        durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                    )
+                }
+            }
+            Task {
+                let result = await retryTask.value
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    continuation.resume(returning: result)
+                }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(15))
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    retryTask.cancel()
+                    DebugFileLogger.log("translation retry timeout after 15s")
+                    continuation.resume(returning: TimedLLMResult(
+                        text: nil,
+                        durationSeconds: 15
+                    ))
+                }
+            }
+        }
+    }
+
+    private func failTranslation(
+        _ error: Error,
+        rawText: String,
+        myGeneration: UInt64
+    ) async {
+        DebugFileLogger.log("translation failed reason=\(String(describing: error))")
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        await historyStore.insert(HistoryRecord(
+            id: UUID().uuidString,
+            createdAt: Date(),
+            durationSeconds: duration,
+            rawText: rawText,
+            processingMode: currentMode.name,
+            processedText: nil,
+            finalText: rawText,
+            status: "translation_error",
+            characterCount: rawText.count,
+            asrProvider: isManualInput ? "manual" : activeProvider.displayName,
+            asrModel: isManualInput ? nil : currentASRModelLabel(for: activeProvider),
+            llmProvider: historyLLMProvider,
+            llmModel: historyLLMModel,
+            asrDurationSeconds: historyASRDurationSeconds,
+            llmDurationSeconds: historyLLMDurationSeconds,
+            postSnippetText: historySnippetApplication?.text,
+            appliedSnippets: historySnippetApplication?.appliedRules,
+            processingModeId: currentMode.id.uuidString,
+            targetBundleId: historyTarget().bundleId,
+            targetAppName: historyTarget().appName
+        ))
+        if !isManualInput { KeychainService.addASRUsage(seconds: duration) }
+        SoundFeedback.playError()
+        onASREvent?(.error(error))
+        onASREvent?(.completed)
+        if sessionGeneration == myGeneration {
+            state = .idle
+            currentTranscript = .empty
+            hasEmittedReadyForCurrentSession = false
+        }
+        resetSessionLLMState()
+        SystemVolumeManager.restore()
+        if !isManualInput { warmUpASRConnection() }
+    }
+
+    private func makeIntelliSenseHistoryTraceJSON(
+        input: String,
+        finalText: String,
+        processingFailed: Bool
+    ) async -> String? {
+        guard currentMode.id == ProcessingMode.intelliSenseId,
+              intelliSenseStartedModeID == ProcessingMode.intelliSenseId,
+              !intelliSenseCrossModeFallback else { return nil }
+
+        let settings: IntelliSenseSettings
+        if let frozenSettings = intelliSenseRequestContext?.settings ?? intelliSenseSettings {
+            settings = frozenSettings
+        } else {
+            settings = await IntelliSenseSettingsStore.shared.load()
+        }
+        let snapshot: IntelliSenseContextSnapshot
+        if let frozen = intelliSenseRequestContext?.snapshot {
+            snapshot = frozen
+        } else if let task = intelliSenseContextTask {
+            snapshot = await task.value
+        } else if let target = intelliSenseTarget {
+            snapshot = .appOnly(target)
+        } else {
+            snapshot = .unavailable
+        }
+        let promptInput = IntelliSensePromptInput(
+            context: snapshot,
+            settings: settings,
+            expressionProfile: intelliSenseRequestContext?.expressionProfile
+        )
+        let trace = IntelliSenseHistoryTraceBuilder.build(
+            input: input,
+            finalText: finalText,
+            promptInput: promptInput,
+            processingResult: intelliSenseLastProcessingResult,
+            processingFailed: processingFailed
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(trace) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func resetSessionLLMState() {
+        clearIntelliSenseSessionContext()
+        clearTranslationSessionContext()
+    }
+
+    // MARK: - Timeout Helper
+
+    /// Run a @Sendable closure off-actor with a hard deadline.
+    /// Returns true if completed in time. On timeout the operation task is cancelled.
+    /// Uses detached tasks + continuation so withTaskGroup can't deadlock.
+    private func withTimeout(
+        _ duration: Duration,
+        operation: @Sendable @escaping () async throws -> Void
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            let operationTask = Task.detached {
+                let ok: Bool
+                do {
+                    try await operation()
+                    ok = true
+                } catch {
+                    ok = false
+                }
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    continuation.resume(returning: ok)
+                }
+            }
+            Task.detached {
+                try? await Task.sleep(for: duration)
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    operationTask.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+    }
+
+    /// Wait for the ASR to emit a finalized transcript, with timeout.
+    /// "Finalized" means either isFinal flag is set, or confirmed segments exist
+    /// with no remaining partial text (Volcano bigmodel_async doesn't send asyncFinal).
+    private func awaitFinalTranscript(timeout: Duration) async -> String? {
+        if isTranscriptEffectivelyFinal {
+            return currentTranscript.displayText
+        }
+        return await withCheckedContinuation { continuation in
+            self.finalTranscriptTimeoutTask?.cancel()
+            self.finalTranscriptCont = continuation
+            self.finalTranscriptTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard let self, !Task.isCancelled else { return }
+                await self.resumeFinalTranscriptOnTimeout()
+            }
+        }
+    }
+
+    private func resumeFinalTranscriptOnTimeout() {
+        if let cont = finalTranscriptCont {
+            finalTranscriptCont = nil
+            finalTranscriptTimeoutTask = nil
+            cont.resume(returning: nil)
+        }
+    }
+
+    private func resumeFirstStreamingTextOnTimeout() {
+        if let cont = firstStreamingTextCont {
+            firstStreamingTextCont = nil
+            firstStreamingTextTimeoutTask = nil
+            cont.resume(returning: false)
+        }
+    }
+
+    /// Whether the current transcript is effectively final.
+    /// Only trust the explicit isFinal flag (asyncFinal from server).
+    /// The previous heuristic (partialText.isEmpty) caused premature triggers
+    /// when the server cleared partials during finalization before sending the
+    /// complete result, losing tail audio that was spoken but not yet transcribed.
+    /// For providers that never send asyncFinal, we fall through to the .completed
+    /// event handler which also resumes the finalTranscriptCont.
+    private var isTranscriptEffectivelyFinal: Bool {
+        currentTranscript.isFinal
+    }
+
+    /// Wait for the ASR to emit any non-empty streaming text, with timeout.
+    /// Returns true if text arrived, false on timeout.
+    private func awaitFirstStreamingText(timeout: Duration) async -> Bool {
+        let text = currentTranscript.composedText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { return true }
+        return await withCheckedContinuation { continuation in
+            self.firstStreamingTextTimeoutTask?.cancel()
+            self.firstStreamingTextCont = continuation
+            self.firstStreamingTextTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard let self, !Task.isCancelled else { return }
+                await self.resumeFirstStreamingTextOnTimeout()
+            }
+        }
+    }
+
+    static func shouldAttemptBatchFallback(
+        uploadFailed: Bool,
+        asrTeardownClean: Bool,
+        streamingError: Error?
+    ) -> Bool {
+        uploadFailed || !asrTeardownClean || streamingError != nil
+    }
+
+    /// Only suppress a *new* retry after a cancelled, text-free streaming session
+    /// has had its full finalization grace. Normal stops, batch providers, any
+    /// previously received text and transport failures keep the recovery path.
+    static func shouldSkipCancelledEmptyRetry(
+        isCancelled: Bool,
+        providerIsStreaming: Bool,
+        hasReceivedASRText: Bool,
+        audioUploadDrained: Bool,
+        endAudioSucceeded: Bool,
+        uploadFailed: Bool,
+        streamingError: Error?
+    ) -> Bool {
+        isCancelled && providerIsStreaming && !hasReceivedASRText
+            && audioUploadDrained && endAudioSucceeded
+            && !uploadFailed && streamingError == nil
+    }
+
+    /// Batch / non-streaming providers must strictly produce finalized output.
+    /// If a batch provider or its fallback failed without emitting isFinal,
+    /// discard unconfirmed partial text to avoid injecting truncated fragments.
+    static func resolveEffectiveTranscript(
+        currentTranscript: RecognitionTranscript,
+        providerIsStreaming: Bool
+    ) -> RecognitionTranscript {
+        if !providerIsStreaming && !currentTranscript.isFinal {
+            return .empty
+        }
+        return currentTranscript
+    }
+
+    static func shouldRunInputModeLLM(
+        recordingPurpose: RecordingPurpose,
+        mode: ProcessingMode
+    ) -> Bool {
+        guard case .input = recordingPurpose else { return false }
+        return !mode.prompt.isEmpty && mode.executionKind == .recording
+    }
+
+    // MARK: - Batch Fallback
+
+    /// Try to transcribe full audio via the same provider.
+    /// Soniox uses its async REST API (faster for complete audio); others use a fresh streaming connection.
+    private func attemptBatchFallback(
+        audio: Data,
+        config: any ASRProviderConfig,
+        provider: ASRProvider
+    ) async -> String? {
+        #if DEBUG
+        if let batchFallbackForTesting { return await batchFallbackForTesting() }
+        #endif
+        // Soniox: use async REST API instead of re-streaming
+        if provider == .soniox, let sonioxConfig = config as? SonioxASRConfig {
+            let bypass = ProxyBypassMode.current.bypassASR
+            let hotwords = HotwordStorage.loadEffective()
+            let apiKey = sonioxConfig.apiKey
+            DebugFileLogger.log("batch fallback: using Soniox async API (\(audio.count) bytes)")
+            let resultTask = Task.detached {
+                await SonioxAsyncClient.transcribe(
+                    audioData: audio,
+                    apiKey: apiKey,
+                    hotwords: hotwords,
+                    bypassProxy: bypass
+                )
+            }
+            return await withCheckedContinuation { continuation in
+                let finished = OSAllocatedUnfairLock(initialState: false)
+                Task.detached {
+                    let result = await resultTask.value
+                    if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                        continuation.resume(returning: result?.text)
+                    }
+                }
+                Task.detached {
+                    try? await Task.sleep(for: .seconds(90))
+                    if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                        resultTask.cancel()
+                        DebugFileLogger.log("batch fallback (async) timeout after 90s")
+                        continuation.resume(returning: nil)
+                    }
+                }
+            }
+        }
+
+        // Other providers: fresh streaming connection with all audio at once
+        let resultTask = Task.detached { () -> String? in
+            guard let client = ASRProviderRegistry.createClient(for: provider, config: config) else { return nil }
+            do {
+                let options = ASRRequestOptions(enablePunc: true)
+                try await client.connect(config: config, options: options)
+                try await client.sendAudio(audio)
+                try await client.endAudio()
+
+                let events = await client.events
+                for await event in events {
+                    switch event {
+                    case .transcript(let transcript) where transcript.isFinal:
+                        await client.disconnect()
+                        let text = transcript.authoritativeText.isEmpty
+                            ? transcript.composedText : transcript.authoritativeText
+                        return text.isEmpty ? nil : text
+                    case .error:
+                        await client.disconnect()
+                        return nil
+                    case .completed:
+                        await client.disconnect()
+                        return nil
+                    default:
+                        continue
+                    }
+                }
+                await client.disconnect()
+                return nil
+            } catch {
+                DebugFileLogger.log("batch fallback error: \(error)")
+                await client.disconnect()
+                return nil
+            }
+        }
+        // Hard timeout via withCheckedContinuation (same pattern as withTimeout).
+        // If resultTask is stuck in a non-cooperative await, we return nil after 90s.
+        return await withCheckedContinuation { continuation in
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            Task.detached {
+                let result = await resultTask.value
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    continuation.resume(returning: result)
+                }
+            }
+            Task.detached {
+                try? await Task.sleep(for: .seconds(90))
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    resultTask.cancel()
+                    DebugFileLogger.log("batch fallback timeout after 90s")
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    // MARK: - Force Reset
+
+    /// Aggressively tear down all resources and return to idle.
+    /// Used when a new recording is requested but the session is stuck
+    /// (e.g. stopRecording hung on a WebSocket timeout).
+    private func forceReset() async {
+        NSLog("[Session] forceReset from state=%@", String(describing: state))
+        DebugFileLogger.log("forceReset from state=\(state)")
+
+        if let cont = firstStreamingTextCont {
+            firstStreamingTextCont = nil
+            firstStreamingTextTimeoutTask?.cancel()
+            firstStreamingTextTimeoutTask = nil
+            cont.resume(returning: false)
+        }
+        if let cont = finalTranscriptCont {
+            finalTranscriptCont = nil
+            finalTranscriptTimeoutTask?.cancel()
+            finalTranscriptTimeoutTask = nil
+            cont.resume(returning: nil)
+        }
+        eventConsumptionTask?.cancel()
+        eventConsumptionTask = nil
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
+        asrCleanupTask?.cancel()
+        asrCleanupTask = nil
+        asrCleanupGeneration = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        resetSessionLLMState()
+
+        StartSoundRouteGate.shared.disarm(generation: sessionGeneration)
+        currentSpeechGraceGate?.disarm()
+        audioStartTimingTracker?.flushRemainingLog()
+        audioEngine.stop()
+        audioEngine.onAudioChunk = nil
+        audioEngine.onAudioLevel = nil
+        audioEngine.onFirstSample = nil
+        await finishAudioChunkPipeline(timeout: .milliseconds(100))
+
+        if let client = asrClient {
+            Task.detached { await client.disconnect() }  // fire-and-forget: detached to avoid blocking actor
+        }
+        asrClient = nil
+
+        sessionGeneration &+= 1
+        state = .idle
+        currentTranscript = .empty
+        promptContext = .empty
+        capturedPromptContextRequirements = []
+        pendingPromptContextCapture = nil
+        pendingSelectionAskRequestContext = nil
+        hasEmittedReadyForCurrentSession = false
+        currentConfig = nil
+        uploadFailureFlag = nil
+        lastStreamingError = nil
+        clearRecoveryState()
+        SystemVolumeManager.restore()
+    }
+
+    // MARK: - Revise Implementation
+
+    private func completeRevise(
+        prepared: RevisePreparedTarget,
+        rawInstruction: String,
+        asrDuration: Double?,
+        myGeneration: UInt64
+    ) async {
+        let trimmedInstruction = rawInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInstruction.isEmpty else {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            onASREvent?(.reviseFailed(.instructionEmpty))
+            cleanupSessionAfterRevise(myGeneration: myGeneration)
+            return
+        }
+
+        // Check local deterministic undo
+        if ReviseUndoClassifier.isUndoInstruction(trimmedInstruction) {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            let undoResult = await ReviseCoordinator.shared.undo()
+            switch undoResult {
+            case .success(let restoredText):
+                if let latestRevs = await historyStore.fetchRevisions(sourceRecordID: prepared.sourceRecordID).last {
+                    await historyStore.markRevisionUndone(id: latestRevs.id)
+                }
+                onASREvent?(.reviseUndone(text: restoredText))
+            case .failure(let failure):
+                onASREvent?(.reviseFailed(failure))
+            }
+            cleanupSessionAfterRevise(myGeneration: myGeneration)
+            return
+        }
+
+        if prepared.isDeletionTombstone {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            onASREvent?(.reviseFailed(.noEditableTarget))
+            cleanupSessionAfterRevise(myGeneration: myGeneration)
+            return
+        }
+
+        // Budget & sensitive scan
+        if prepared.currentText.count > ReviseInputBudget.maxTargetCharacters {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            onASREvent?(.reviseFailed(.targetTooLong))
+            cleanupSessionAfterRevise(myGeneration: myGeneration)
+            return
+        }
+
+        if trimmedInstruction.count > ReviseInputBudget.maxInstructionCharacters {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            onASREvent?(.reviseFailed(.instructionTooLong))
+            cleanupSessionAfterRevise(myGeneration: myGeneration)
+            return
+        }
+
+        if ReviseSensitiveTextScanner.containsSensitiveContent(prepared.currentText) ||
+           ReviseSensitiveTextScanner.containsSensitiveContent(trimmedInstruction) {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            onASREvent?(.reviseFailed(.sensitive))
+            cleanupSessionAfterRevise(myGeneration: myGeneration)
+            return
+        }
+
+        guard let runtime = await resolveLLMRuntime() else {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            onASREvent?(.reviseFailed(.llmUnavailable))
+            cleanupSessionAfterRevise(myGeneration: myGeneration)
+            return
+        }
+        await ReviseCoordinator.shared.setProcessing(transactionID: prepared.transactionID)
+        onASREvent?(.reviseProcessing)
+        let request = ReviseRequest(
+            targetText: prepared.currentText,
+            instruction: trimmedInstruction,
+            controlKind: prepared.controlKind,
+            sourceLanguage: ReviseLanguageProfile.detect(in: prepared.currentText),
+            sourceModeKind: prepared.sourceModeKind
+        )
+        let userPrompt = RevisePromptBuilder.buildUserPrompt(request: request)
+        let systemPrompt = RevisePromptBuilder.systemPrompt
+
+        let llmStart = Date()
+        do {
+            let rawModelResponse = try await runtime.client.process(
+                text: userPrompt,
+                prompt: systemPrompt,
+                config: runtime.config,
+                inputBoundary: .inline,
+                invocationContext: LLMInvocationContext(featureSource: .voiceRevise)
+            )
+            let llmDuration = max(0, Date().timeIntervalSince(llmStart))
+            guard sessionGeneration == myGeneration else {
+                await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                return
+            }
+
+            let validation = ReviseOutputValidator.validate(
+                request: request,
+                rawModelResponse: rawModelResponse,
+                candidateTransform: { TextOutputFormatter.format($0) }
+            )
+            let diagLog = "revise_diag: tx=\(prepared.transactionID.uuidString.prefix(8)) instLen=\(trimmedInstruction.count) targetLen=\(prepared.currentText.count) respLen=\(rawModelResponse.count) intent=\(validation.trace.intent?.rawValue ?? "none") scope=\(validation.trace.scopeKind?.rawValue ?? "none") decision=\(validation.trace.decision) rejection=\(validation.trace.rejection?.rawValue ?? "none") hunks=\(validation.trace.diffHunkCount ?? 0) asrSec=\(String(format: "%.2f", asrDuration ?? 0)) llmSec=\(String(format: "%.2f", llmDuration))"
+            DebugFileLogger.log(diagLog)
+
+            switch validation.decision {
+            case .accept:
+                guard let candidate = validation.candidateText else {
+                    await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                    onASREvent?(.reviseFailed(.validationRejected))
+                    cleanupSessionAfterRevise(myGeneration: myGeneration)
+                    return
+                }
+
+                let revisionID = UUID().uuidString
+                let commitResult = await ReviseCoordinator.shared.commit(
+                    transactionID: prepared.transactionID,
+                    candidate: candidate,
+                    revisionID: revisionID
+                )
+
+                switch commitResult {
+                case .success(let success):
+                    let traceJSON = (try? JSONEncoder().encode(validation.trace)).flatMap { String(data: $0, encoding: .utf8) }
+                    let revRecord = RecognitionRevisionRecord(
+                        id: revisionID,
+                        sourceRecordID: prepared.sourceRecordID,
+                        instructionText: trimmedInstruction,
+                        beforeText: prepared.currentText,
+                        afterText: candidate,
+                        intent: validation.trace.intent ?? .rewrite,
+                        scopeKind: validation.trace.scopeKind ?? .whole,
+                        status: "applied",
+                        asrProvider: activeProvider.displayName,
+                        asrModel: currentASRModelLabel(for: activeProvider),
+                        llmProvider: runtime.providerID,
+                        llmModel: runtime.config.model,
+                        asrDurationSeconds: asrDuration,
+                        llmDurationSeconds: llmDuration,
+                        validationTraceJSON: traceJSON
+                    )
+                    await historyStore.insertRevision(revRecord)
+
+                    if prepared.learningResumePlan?.shouldResume == true,
+                       let newContext = success.trackingContext {
+                        let category = AppContextClassifier.classify(
+                            bundleIdentifier: newContext.bundleIdentifier,
+                            appName: nil
+                        )
+                        await MainActor.run {
+                            PostInjectionLearningCoordinator.shared.begin(
+                                newContext,
+                                options: PostInjectionLearningOptions(
+                                    correctionEnabled: true,
+                                    expressionLearningEnabled: true,
+                                    appCategory: category
+                                )
+                            )
+                        }
+                    }
+
+                    let undoTicketID = await ReviseCoordinator.shared.getLatestUndoTicketID()
+                    onASREvent?(.reviseCompleted(
+                        text: candidate,
+                        message: L("已改好", "Revised"),
+                        undoTicketID: undoTicketID
+                    ))
+
+                case .failure(let err):
+                    DebugFileLogger.log("revise_diag: commit failure=\(err)")
+                    onASREvent?(.reviseFailed(err))
+                }
+
+            case .reject(let rejection):
+                await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                let failure: ReviseFailure
+                switch rejection {
+                case .instructionTooLong: failure = .instructionTooLong
+                case .targetTooLong: failure = .targetTooLong
+                case .sensitiveContentLeak: failure = .sensitive
+                case .malformedJSON, .schemaVersionMismatch, .codeFence, .toolCall: failure = .malformedModelResponse
+                case .modelAmbiguous, .scopeMultipleMatchesWithoutOrdinal: failure = .instructionAmbiguous
+                case .implicitReplacementAmbiguous: failure = .implicitReplacementAmbiguous
+                case .protectedFactConflict, .protectedTokenRemovedWithoutAuthorization, .protectedTokenAddedWithoutAuthorization: failure = .protectedFactConflict
+                case .unsupportedIntent: failure = .unsupportedInstruction
+                case .responseTooLarge: failure = .responseTooLarge
+                case .diffBudgetExceeded: failure = .diffBudgetExceeded
+                default: failure = .validationRejected
+                }
+                onASREvent?(.reviseFailed(failure))
+            }
+        } catch {
+            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+            DebugFileLogger.log("revise_diag: runtime LLM exception occurred")
+            onASREvent?(.reviseFailed(.providerFailure))
+        }
+
+        cleanupSessionAfterRevise(myGeneration: myGeneration)
+    }
+
+    private func cleanupSessionAfterRevise(myGeneration: UInt64) {
+        if sessionGeneration == myGeneration, state != .idle {
+            state = .idle
+            hasEmittedReadyForCurrentSession = false
+            currentTranscript = .empty
+            recordingPurpose = .input(.direct)
+            warmUpASRConnection()
+        }
+        resetSessionLLMState()
+        SystemVolumeManager.restore()
+    }
+
+    private func releaseEarlyCapture(generation: UInt64) {
+        // The gate ignores a stale generation, so disarming is always safe.
+        StartSoundRouteGate.shared.disarm(generation: generation)
+        // A superseded round must not touch shared capture state: forceReset()
+        // already stopped its microphone, and the callbacks, speech gate and
+        // timing tracker now belong to the newer round.
+        guard sessionGeneration == generation else {
+            DebugFileLogger.log("releaseEarlyCapture: generation=\(generation) superseded by \(sessionGeneration), leaving capture state")
+            return
+        }
+        audioEngine.onAudioChunk = nil
+        audioEngine.onAudioLevel = nil
+        audioEngine.onFirstSample = nil
+        currentSpeechGraceGate = nil
+        audioStartTimingTracker = nil
+        audioEngine.stop()
+        DebugFileLogger.log("releaseEarlyCapture: microphone released for generation=\(generation)")
+    }
+
+    func recordFirstSample(at instant: ContinuousClock.Instant, generation: UInt64) {
+        guard sessionGeneration == generation else { return }
+        audioStartTimingTracker?.recordFirstSample(at: instant)
+    }
+
+    func speechGraceArmer(generation: UInt64) -> (@Sendable (ContinuousClock.Instant) -> Void)? {
+        guard sessionGeneration == generation, let gate = currentSpeechGraceGate else { return nil }
+        let durationMs = SoundFeedback.startSoundDurationMs()
+        guard durationMs > 0 else { return nil }
+        return { [weak gate] startedAt in
+            gate?.arm(until: startedAt + .milliseconds(durationMs))
+        }
+    }
+
+    func handleInputDeviceChange() {
+        audioEngine.invalidatePrepared(reason: "input-device-changed")
+        audioEngine.prepareIfEligible()
+    }
+
+}
+
+private final class AudioStartTimingTracker: @unchecked Sendable {
+    let generation: UInt64
+    let requestedAt: ContinuousClock.Instant
+    let awaitIdleDuration: Duration?
+    let sessionEntryDuration: Duration?
+    let captureStartBeginDuration: Duration?
+
+    private let lock = NSLock()
+    private var deviceInputDuration: Duration?
+    private var startRunningDuration: Duration?
+    private var preparedStatus: String = "-"
+    private var deviceCategory: String = "-"
+    private var firstSampleDuration: Duration?
+    private var readyDuration: Duration?
+    private var hasLogged = false
+
+    init(
+        generation: UInt64,
+        requestedAt: ContinuousClock.Instant,
+        awaitIdleDuration: Duration?,
+        sessionEntryDuration: Duration?,
+        captureStartBeginDuration: Duration?
+    ) {
+        self.generation = generation
+        self.requestedAt = requestedAt
+        self.awaitIdleDuration = awaitIdleDuration
+        self.sessionEntryDuration = sessionEntryDuration
+        self.captureStartBeginDuration = captureStartBeginDuration
+    }
+
+    func recordEngineStart(info: AudioCaptureStartInfo) {
+        lock.withLock {
+            deviceInputDuration = info.deviceInputDuration
+            startRunningDuration = info.startRunningDuration
+            preparedStatus = info.preparedStatus
+            deviceCategory = info.deviceCategory
+        }
+    }
+
+    func recordFirstSample(at instant: ContinuousClock.Instant) {
+        lock.withLock {
+            if firstSampleDuration == nil {
+                firstSampleDuration = instant - requestedAt
+            }
+            logIfReadyLocked()
+        }
+    }
+
+    func recordReady(at instant: ContinuousClock.Instant) {
+        lock.withLock {
+            if readyDuration == nil {
+                readyDuration = instant - requestedAt
+            }
+            logIfReadyLocked()
+        }
+    }
+
+    private func logIfReadyLocked() {
+        guard !hasLogged, readyDuration != nil, firstSampleDuration != nil else { return }
+        hasLogged = true
+        let timing = AudioStartTiming(
+            awaitIdle: awaitIdleDuration,
+            sessionEntry: sessionEntryDuration,
+            captureStartBegin: captureStartBeginDuration,
+            deviceInput: deviceInputDuration,
+            startRunning: startRunningDuration,
+            prepared: preparedStatus,
+            firstSample: firstSampleDuration,
+            ready: readyDuration,
+            device: deviceCategory
+        )
+        DebugFileLogger.log(timing.formattedLine())
+    }
+
+    func flushRemainingLog() {
+        lock.withLock {
+            guard !hasLogged else { return }
+            hasLogged = true
+            let timing = AudioStartTiming(
+                awaitIdle: awaitIdleDuration,
+                sessionEntry: sessionEntryDuration,
+                captureStartBegin: captureStartBeginDuration,
+                deviceInput: deviceInputDuration,
+                startRunning: startRunningDuration,
+                prepared: preparedStatus,
+                firstSample: firstSampleDuration,
+                ready: readyDuration,
+                device: deviceCategory
+            )
+            DebugFileLogger.log(timing.formattedLine())
+        }
+    }
+}

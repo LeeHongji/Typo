@@ -1,0 +1,662 @@
+import AppKit
+import AudioToolbox
+import AVFoundation
+import CoreAudio
+
+// MARK: - Start Sound Style
+
+/// User-selectable start sound options, persisted via @AppStorage("tf_startSound").
+enum StartSoundStyle: String, CaseIterable, Sendable {
+    case off       = "off"
+    case chime     = "chime"
+    case pluck     = "pluck"
+    case submerge  = "submerge"
+    case pong      = "pong"
+    case waterDrop1 = "waterDrop1"
+    case waterDrop2 = "waterDrop2"
+    case keyboard  = "keyboard"
+
+    var displayName: String {
+        switch self {
+        case .off:        return L("关闭", "Off")
+        case .chime:      return L("电子提示音", "Chime")
+        case .pluck:      return L("拨弦", "Pluck")
+        case .submerge:   return L("沉浸", "Submerge")
+        case .pong:       return L("乒", "Pong")
+        case .waterDrop1: return L("水滴 1", "Water Drop 1")
+        case .waterDrop2: return L("水滴 2", "Water Drop 2")
+        case .keyboard:   return L("键盘", "Keyboard")
+        }
+    }
+}
+
+/// Audio feedback using pre-prepared AVAudioPlayer instances.
+/// Buffers are generated/loaded at warmup and converted to WAV data.
+/// AVAudioPlayer uses AudioQueue internally, which pre-buffers audio data
+/// before playback starts, avoiding the frame-drop issues seen with
+/// AVAudioPlayerNode's real-time render callback path.
+enum SoundFeedback {
+
+    private struct ToneSpec {
+        let tones: [(frequency: Double, duration: Double)]
+        let volume: Float
+        let label: String
+    }
+
+    /// All mutable state is accessed exclusively on this serial queue.
+    private static let soundQueue = DispatchQueue(label: "com.type4me.sound")
+    nonisolated(unsafe) private static var hasWarmedUp = false
+
+    /// Pre-prepared AVAudioPlayer instances keyed by label (used for keep-alive, primer).
+    nonisolated(unsafe) private static var cachedPlayers: [String: AVAudioPlayer] = [:]
+
+    /// Cached PCM buffers for tone generation and bundled sounds.
+    nonisolated(unsafe) private static var cachedBuffers: [String: AVAudioPCMBuffer] = [:]
+    nonisolated(unsafe) private static var cachedWAVData: [String: Data] = [:]
+
+    #if DEBUG
+    nonisolated(unsafe) static var customSoundQueue: DispatchQueue?
+    nonisolated(unsafe) static var customPlayerFactory: ((String) -> (any SoundPlaying)?)?
+    #endif
+
+    private static var effectiveSoundQueue: DispatchQueue {
+        #if DEBUG
+        if let custom = customSoundQueue { return custom }
+        #endif
+        return soundQueue
+    }
+    private static let sampleRate: Double = 44100
+    private static let engineFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 44100, channels: 1, interleaved: true
+    )!
+
+    private static let startSpec = ToneSpec(
+        tones: [(frequency: 587, duration: 0.06), (frequency: 880, duration: 0.09)],
+        volume: 1.0, label: "start"
+    )
+    private static let stopSpec = ToneSpec(
+        tones: [(frequency: 740, duration: 0.04), (frequency: 1175, duration: 0.06)],
+        volume: 1.0, label: "stop"
+    )
+    private static let errorSpec = ToneSpec(
+        tones: [(frequency: 330, duration: 0.08), (frequency: 220, duration: 0.1)],
+        volume: 1.0, label: "error"
+    )
+
+    // MARK: - Public API
+
+    static func warmUp() {
+        soundQueue.async {
+            guard !hasWarmedUp else { return }
+            hasWarmedUp = true
+            NSLog("[SoundFeedback] warmUp")
+            DebugFileLogger.log("sound warmUp")
+            prepareBuffers()
+            preparePlayers()
+        }
+    }
+
+    /// Duration of the current start sound in milliseconds.
+    /// Returns 0 when sound is off, falls back to 500 if buffers aren't ready.
+    static func startSoundDurationMs() -> Int {
+        let style = StartSoundStyle(
+            rawValue: UserDefaults.standard.string(forKey: "tf_startSound") ?? StartSoundStyle.chime.rawValue
+        ) ?? .chime
+
+        let label: String
+        switch style {
+        case .off: return 0
+        case .chime: label = startSpec.label
+        case .pluck: label = "pluck"
+        case .submerge: label = "submerge"
+        case .pong: label = "pong"
+        case .waterDrop1, .waterDrop2, .keyboard: label = style.rawValue
+        }
+
+        return soundQueue.sync {
+            guard let buffer = cachedBuffers[label] else { return 500 }
+            return Int(Double(buffer.frameLength) / sampleRate * 1000)
+        }
+    }
+    static func playStart(_ request: StartSoundRequest) async -> StartSoundPlayback {
+        let style = StartSoundStyle(
+            rawValue: UserDefaults.standard.string(forKey: "tf_startSound") ?? StartSoundStyle.chime.rawValue
+        ) ?? .chime
+
+        guard style != .off else {
+            DebugFileLogger.log("sound playStart disabled gen=\(request.generation)")
+            return .disabled
+        }
+
+        let enqueuedAt = ContinuousClock.now
+        let targetQueue = effectiveSoundQueue
+
+        return await withCheckedContinuation { continuation in
+            targetQueue.async {
+                // ① Check validity before touching any playback state
+                guard request.isStillValid() else {
+                    let waitMs = formatWait(from: enqueuedAt)
+                    DebugFileLogger.log("start sound queue gen=\(request.generation) result=skipped(invalidated) waitedInQueue=\(waitMs)ms")
+                    continuation.resume(returning: .skipped(.invalidated))
+                    return
+                }
+
+                let (label, volume) = resolveStartSoundSpec(for: style)
+                var player: (any SoundPlaying)?
+                if request.rebuildPlayer {
+                    player = rebuildPlayer(for: label)
+                } else {
+                    player = cachedPlayers[label] ?? rebuildPlayer(for: label)
+                }
+
+                guard let activePlayer = player else {
+                    continuation.resume(returning: .skipped(.noPlayer))
+                    return
+                }
+
+                if let avPlayer = activePlayer as? AVAudioPlayer {
+                    applyOutputDevice(to: avPlayer)
+                    avPlayer.prepareToPlay()
+                }
+
+                // Allow currently playing sound to finish gracefully without clicking
+                for (key, p) in cachedPlayers where key != label {
+                    if p.isPlaying {
+                        let remaining = max(0, p.duration - p.currentTime)
+                        if remaining > 0 && remaining < 0.35 {
+                            Thread.sleep(forTimeInterval: remaining)
+                        }
+                    }
+                    p.stop()
+                }
+                // ③ Re-check after rebuild
+                guard request.isStillValid() else {
+                    let waitMs = formatWait(from: enqueuedAt)
+                    DebugFileLogger.log("start sound queue gen=\(request.generation) result=skipped(invalidated) waitedInQueue=\(waitMs)ms")
+                    continuation.resume(returning: .skipped(.invalidated))
+                    return
+                }
+
+                // ④ Notify willPlay with actual playback start time
+                let startedAt = ContinuousClock.now
+                request.willPlay?(startedAt)
+
+                // ⑤ Play and retry if failed
+                activePlayer.volume = volume
+                activePlayer.currentTime = 0
+                var ok = activePlayer.play()
+                if !ok {
+                    // Retry once with rebuilt player
+                    if let retried = rebuildPlayer(for: label) {
+                        guard request.isStillValid() else {
+                            continuation.resume(returning: .skipped(.invalidated))
+                            return
+                        }
+                        if let avPlayer = retried as? AVAudioPlayer {
+                            applyOutputDevice(to: avPlayer)
+                        }
+                        let retryTime = ContinuousClock.now
+                        request.willPlay?(retryTime)
+                        retried.volume = volume
+                        retried.currentTime = 0
+                        ok = retried.play()
+                    }
+                }
+
+                let waitMs = formatWait(from: enqueuedAt)
+                if ok {
+                    DebugFileLogger.log("start sound queue gen=\(request.generation) result=played waitedInQueue=\(waitMs)ms")
+                    continuation.resume(returning: .played(startedAt: startedAt))
+                } else {
+                    DebugFileLogger.log("start sound queue gen=\(request.generation) result=skipped(playFailed) waitedInQueue=\(waitMs)ms")
+                    continuation.resume(returning: .skipped(.playFailed))
+                }
+            }
+        }
+    }
+
+    static func playStart() {
+        let style = StartSoundStyle(
+            rawValue: UserDefaults.standard.string(forKey: "tf_startSound") ?? StartSoundStyle.chime.rawValue
+        ) ?? .chime
+        NSLog("[SoundFeedback] playStart style=%@", style.rawValue)
+        DebugFileLogger.log("sound playStart style=\(style.rawValue)")
+        let (label, volume) = resolveStartSoundSpec(for: style)
+        if style != .off {
+            playSound(label, volume: volume)
+        }
+    }
+
+    private static func resolveStartSoundSpec(for style: StartSoundStyle) -> (label: String, volume: Float) {
+        switch style {
+        case .off: return (startSpec.label, 0)
+        case .chime: return (startSpec.label, startSpec.volume)
+        case .pluck: return ("pluck", 1.0)
+        case .submerge: return ("submerge", 1.0)
+        case .pong: return ("pong", 1.0)
+        case .waterDrop1, .waterDrop2, .keyboard:
+            return (style.rawValue, 1.0)
+        }
+    }
+
+    private static func formatWait(from instant: ContinuousClock.Instant) -> Int {
+        let diff = ContinuousClock.now - instant
+        return Int(round(Double(diff.components.seconds) * 1000.0 + Double(diff.components.attoseconds) / 1_000_000_000_000_000.0))
+    }
+    static func playStop() {
+        let style = StartSoundStyle(
+            rawValue: UserDefaults.standard.string(forKey: "tf_startSound") ?? StartSoundStyle.chime.rawValue
+        ) ?? .chime
+        NSLog("[SoundFeedback] playStop style=%@", style.rawValue)
+        DebugFileLogger.log("sound playStop style=\(style.rawValue)")
+        switch style {
+        case .off: return
+        case .chime: playSound(stopSpec.label, volume: stopSpec.volume)
+        case .pluck: playSound("pluck", volume: 1.0, fallback: stopSpec)
+        case .submerge: playSound("submerge", volume: 1.0, fallback: stopSpec)
+        case .pong: playSound("pong", volume: 1.0, fallback: stopSpec)
+        case .waterDrop1: playSound(StartSoundStyle.waterDrop1.rawValue, volume: 1.0, fallback: stopSpec)
+        case .waterDrop2: playSound(StartSoundStyle.waterDrop2.rawValue, volume: 1.0, fallback: stopSpec)
+        case .keyboard: playSound("keyboard-end", volume: 1.0, fallback: stopSpec)
+        }
+    }
+
+    static func playError() {
+        NSLog("[SoundFeedback] playError")
+        DebugFileLogger.log("sound playError invoked")
+        playSound(errorSpec.label, volume: errorSpec.volume)
+    }
+
+    /// Synchronously enqueues stopping all cached players on the sound queue.
+    static func cancelActiveFeedback() {
+        soundQueue.async {
+            for player in cachedPlayers.values {
+                player.stop()
+            }
+        }
+    }
+
+    static func previewStartSound(_ style: StartSoundStyle) {
+        switch style {
+        case .off: return
+        case .chime: playSound(startSpec.label, volume: startSpec.volume)
+        case .pluck: playSound("pluck", volume: 1.0, fallback: startSpec)
+        case .submerge: playSound("submerge", volume: 1.0, fallback: startSpec)
+        case .pong: playSound("pong", volume: 1.0, fallback: startSpec)
+        case .waterDrop1, .waterDrop2, .keyboard:
+            playSound(style.rawValue, volume: 1.0, fallback: startSpec)
+        }
+    }
+
+
+    // MARK: - Buffer Preparation
+
+    private static func prepareBuffers() {
+        // Chime: synthesized tones
+        cachedBuffers["start"] = buildToneBuffer(for: startSpec)
+        cachedBuffers["stop"] = buildToneBuffer(for: stopSpec)
+        cachedBuffers["error"] = buildToneBuffer(for: errorSpec)
+
+        // Pre-cache bundled sounds
+        let bundledStyles: [StartSoundStyle] = [.waterDrop1, .waterDrop2, .keyboard]
+        for style in bundledStyles {
+            if let url = bundledSoundURL(for: style) {
+                cachedBuffers[style.rawValue] = loadWAVBuffer(url: url)
+            }
+        }
+        for filename in ["keyboard-end", "pluck", "submerge", "pong"] {
+            if let url = bundledSoundURL(filename: filename) {
+                cachedBuffers[filename] = loadWAVBuffer(url: url)
+            }
+        }
+    }
+
+    /// Pre-create AVAudioPlayer instances from cached buffers (like Howler.js initSounds).
+    /// Players are reused on each play, not re-created.
+    private static func preparePlayers() {
+        for (label, buffer) in cachedBuffers {
+            guard let wavData = pcmBufferToWAVData(buffer) else {
+                NSLog("[SoundFeedback] failed to convert %@ to WAV", label)
+                continue
+            }
+            cachedWAVData[label] = wavData
+            do {
+                let player = try AVAudioPlayer(data: wavData)
+                player.volume = 1.0
+                player.prepareToPlay()
+                cachedPlayers[label] = player
+                NSLog("[SoundFeedback] prepared: %@ (%.0fms)", label,
+                      Double(buffer.frameLength) / sampleRate * 1000)
+            } catch {
+                NSLog("[SoundFeedback] failed to create player for %@: %@", label, error.localizedDescription)
+            }
+        }
+        DebugFileLogger.log("sound players prepared: \(cachedPlayers.keys.sorted().joined(separator: ", "))")
+    }
+
+    static func rebuildPlayer(for label: String) -> (any SoundPlaying)? {
+        #if DEBUG
+        if let factory = customPlayerFactory, let mock = factory(label) {
+            return mock
+        }
+        #endif
+        guard let wavData = cachedWAVData[label] else {
+            // Try fallback
+            if let fallbackData = cachedWAVData[startSpec.label] {
+                if let player = try? AVAudioPlayer(data: fallbackData) {
+                    player.prepareToPlay()
+                    cachedPlayers[label] = player
+                    return player
+                }
+            }
+            return nil
+        }
+        do {
+            let player = try AVAudioPlayer(data: wavData)
+            applyOutputDevice(to: player)
+            player.prepareToPlay()
+            cachedPlayers[label] = player
+            return player
+        } catch {
+            return nil
+        }
+    }
+
+    private static func buildToneBuffer(for spec: ToneSpec) -> AVAudioPCMBuffer {
+        let leadInFrames = Int(0.2 * sampleRate)
+        var totalFrames = leadInFrames
+        for tone in spec.tones { totalFrames += Int(tone.duration * sampleRate) }
+
+        let buffer = AVAudioPCMBuffer(pcmFormat: engineFormat, frameCapacity: AVAudioFrameCount(totalFrames))!
+        buffer.frameLength = AVAudioFrameCount(totalFrames)
+        let data = buffer.floatChannelData![0]
+
+        var offset = leadInFrames
+        for tone in spec.tones {
+            let frameCount = Int(tone.duration * sampleRate)
+            for i in 0..<frameCount {
+                let t = Double(i) / sampleRate
+                let envelope = sin(.pi * t / tone.duration)
+                data[offset + i] = Float(sin(2.0 * .pi * tone.frequency * t) * envelope * 0.5)
+            }
+            offset += frameCount
+        }
+        return buffer
+    }
+
+    private static func loadWAVBuffer(url: URL) -> AVAudioPCMBuffer? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let srcFormat = file.processingFormat
+
+        guard let srcBuffer = AVAudioPCMBuffer(
+            pcmFormat: srcFormat, frameCapacity: AVAudioFrameCount(file.length)
+        ) else { return nil }
+        do { try file.read(into: srcBuffer) } catch { return nil }
+
+        if srcFormat.sampleRate == engineFormat.sampleRate
+            && srcFormat.channelCount == engineFormat.channelCount {
+            return srcBuffer
+        }
+
+        guard let converter = AVAudioConverter(from: srcFormat, to: engineFormat) else { return nil }
+        let ratio = engineFormat.sampleRate / srcFormat.sampleRate
+        let capacity = AVAudioFrameCount(Double(file.length) * ratio) + 256
+        guard let dstBuffer = AVAudioPCMBuffer(pcmFormat: engineFormat, frameCapacity: capacity) else { return nil }
+
+        var error: NSError?
+        nonisolated(unsafe) var hasData = true
+        converter.convert(to: dstBuffer, error: &error) { _, outStatus in
+            if hasData {
+                hasData = false
+                outStatus.pointee = .haveData
+                return srcBuffer
+            }
+            outStatus.pointee = .noDataNow
+            return nil
+        }
+        return error == nil ? dstBuffer : nil
+    }
+
+    // MARK: - Playback via AVAudioPlayer
+
+    private static func playSound(_ label: String, volume: Float, fallback: ToneSpec? = nil) {
+        effectiveSoundQueue.async {
+            var player = cachedPlayers[label] ?? (fallback.flatMap { cachedPlayers[$0.label] })
+            if player == nil {
+                player = rebuildPlayer(for: label) as? AVAudioPlayer
+            }
+            guard let activePlayer = player else {
+                NSLog("[SoundFeedback] %@ no player, no fallback", label)
+                NSSound.beep()
+                return
+            }
+            // If another sound is currently playing, allow it to finish gracefully
+            // instead of cutting off mid-waveform and producing clicks or truncation.
+            for (key, p) in cachedPlayers where key != label {
+                if p.isPlaying {
+                    let remaining = max(0, p.duration - p.currentTime)
+                    if remaining > 0 && remaining < 0.35 {
+                        Thread.sleep(forTimeInterval: remaining)
+                    }
+                }
+                p.stop()
+            }
+            applyOutputDevice(to: activePlayer)
+            activePlayer.prepareToPlay()
+            activePlayer.volume = volume
+            activePlayer.currentTime = 0
+            let ok = activePlayer.play()
+            if !ok {
+                // Rebuild and retry once
+                if let rebuilt = rebuildPlayer(for: label) as? AVAudioPlayer {
+                    applyOutputDevice(to: rebuilt)
+                    rebuilt.volume = volume
+                    rebuilt.currentTime = 0
+                    _ = rebuilt.play()
+                }
+            }
+            NSLog("[SoundFeedback] %@ playing via AVAudioPlayer (vol=%.2f)", label, activePlayer.volume)
+            DebugFileLogger.log("sound \(label) play() => AVAudioPlayer")
+        }
+    }
+
+    static var isStartSoundEnabled: Bool {
+        UserDefaults.standard.string(forKey: "tf_startSound") != "off"
+    }
+
+    static func startSoundSpecDurationMs() -> Int {
+        startSoundDurationMs()
+    }
+
+    /// Set the output device on an AVAudioPlayer based on user preference.
+    /// Falls back to system default if the selected device is unavailable.
+    private static func applyOutputDevice(to player: AVAudioPlayer) {
+        let uid = UserDefaults.standard.string(forKey: "tf_selectedSpeakerUID") ?? ""
+        guard !uid.isEmpty else { return } // system default
+        let available = availableOutputDevices()
+        if available.contains(where: { $0.uid == uid }) {
+            player.currentDevice = uid
+        } else {
+            // Selected device gone, reset to system default
+            UserDefaults.standard.removeObject(forKey: "tf_selectedSpeakerUID")
+        }
+    }
+
+    // MARK: - Output Device Enumeration
+
+    /// List available audio output devices via CoreAudio.
+    static func availableOutputDevices() -> [(uid: String, name: String)] {
+        var propertySize: UInt32 = 0
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &propertySize
+        ) == noErr else { return [] }
+
+        let deviceCount = Int(propertySize) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &propertySize, &deviceIDs
+        ) == noErr else { return [] }
+
+        var result: [(uid: String, name: String)] = []
+        for id in deviceIDs {
+            // Check if device has output channels
+            var outputAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioDevicePropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var bufSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(id, &outputAddress, 0, nil, &bufSize) == noErr,
+                  bufSize > 0 else { continue }
+
+            // AudioBufferList is a variable-length structure. A device with more than one
+            // output buffer needs more storage than MemoryLayout<AudioBufferList>.size.
+            let bufferListStorage = UnsafeMutableRawPointer.allocate(
+                byteCount: Int(bufSize),
+                alignment: MemoryLayout<AudioBufferList>.alignment
+            )
+            defer { bufferListStorage.deallocate() }
+            let bufferList = bufferListStorage.assumingMemoryBound(to: AudioBufferList.self)
+            guard AudioObjectGetPropertyData(
+                id, &outputAddress, 0, nil, &bufSize, bufferListStorage
+            ) == noErr else { continue }
+
+            let channelCount = (0..<Int(bufferList.pointee.mNumberBuffers)).reduce(0) { total, i in
+                total + Int(UnsafeMutableAudioBufferListPointer(bufferList)[i].mNumberChannels)
+            }
+            guard channelCount > 0 else { continue }
+
+            // Get device UID
+            var uidRef: Unmanaged<CFString>?
+            var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var uidAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyDeviceUID,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            guard AudioObjectGetPropertyData(id, &uidAddress, 0, nil, &uidSize,
+                                             &uidRef) == noErr else { continue }
+
+            // Get device name
+            var nameRef: Unmanaged<CFString>?
+            var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            var nameAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioObjectPropertyName,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            guard AudioObjectGetPropertyData(id, &nameAddress, 0, nil, &nameSize,
+                                             &nameRef) == noErr else { continue }
+
+            guard let uid = uidRef?.takeRetainedValue() as String?,
+                  let name = nameRef?.takeRetainedValue() as String? else { continue }
+            result.append((uid: uid, name: name))
+        }
+        return result
+    }
+
+    // MARK: - PCM Buffer → WAV Data
+
+    /// Convert a float32 PCM buffer to in-memory WAV data for AVAudioPlayer.
+    private static func pcmBufferToWAVData(_ buffer: AVAudioPCMBuffer) -> Data? {
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0, let floatData = buffer.floatChannelData?[0] else { return nil }
+
+        let channels: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let bytesPerSample = Int(bitsPerSample / 8)
+        let sr = UInt32(sampleRate)
+        let dataSize = UInt32(frameCount * Int(channels) * bytesPerSample)
+
+        var wav = Data(capacity: 44 + Int(dataSize))
+
+        // RIFF header
+        wav.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // "RIFF"
+        appendUInt32(&wav, 36 + dataSize)
+        wav.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
+
+        // fmt chunk
+        wav.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
+        appendUInt32(&wav, 16)
+        appendUInt16(&wav, 1) // PCM
+        appendUInt16(&wav, channels)
+        appendUInt32(&wav, sr)
+        appendUInt32(&wav, sr * UInt32(channels) * UInt32(bytesPerSample))
+        appendUInt16(&wav, channels * UInt16(bytesPerSample))
+        appendUInt16(&wav, bitsPerSample)
+
+        // data chunk
+        wav.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
+        appendUInt32(&wav, dataSize)
+
+        // Convert float32 samples to int16
+        for i in 0..<frameCount {
+            let clamped = max(-1.0, min(1.0, floatData[i]))
+            let int16 = Int16(clamped * Float(Int16.max))
+            appendInt16(&wav, int16)
+        }
+        return wav
+    }
+
+    private static func appendUInt32(_ data: inout Data, _ value: UInt32) {
+        withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+    }
+    private static func appendUInt16(_ data: inout Data, _ value: UInt16) {
+        withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+    }
+    private static func appendInt16(_ data: inout Data, _ value: Int16) {
+        withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+    }
+
+    // MARK: - Bundled Sound URLs
+
+    private static func bundledSoundURL(for style: StartSoundStyle) -> URL? {
+        let filename: String
+        switch style {
+        case .waterDrop1: filename = "water-drop-1"
+        case .waterDrop2: filename = "water-drop-2"
+        case .keyboard: filename = "keyboard-start"
+        default: return nil
+        }
+        return bundledSoundURL(filename: filename)
+    }
+
+    private static func bundledSoundURL(filename: String) -> URL? {
+        if let url = Bundle.main.url(forResource: filename, withExtension: "wav", subdirectory: "Sounds") {
+            return url
+        }
+        let appSupport = AppDataLocation.profileDirectory
+            .appendingPathComponent("Sounds", isDirectory: true)
+        let url = appSupport.appendingPathComponent("\(filename).wav")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+}
+
+protocol SoundPlaying: AnyObject {
+    var volume: Float { get set }
+    var currentTime: TimeInterval { get set }
+    func play() -> Bool
+    func stop()
+}
+
+extension AVAudioPlayer: SoundPlaying {}
+
+struct StartSoundRequest: Sendable {
+    let generation: UInt64
+    let isStillValid: @Sendable () -> Bool
+    let rebuildPlayer: Bool
+    let willPlay: (@Sendable (ContinuousClock.Instant) -> Void)?
+}
+
+enum StartSoundPlayback: Sendable, Equatable {
+    enum SkipReason: String, Sendable { case invalidated, noPlayer, playFailed }
+
+    case played(startedAt: ContinuousClock.Instant)
+    case disabled
+    case skipped(SkipReason)
+}

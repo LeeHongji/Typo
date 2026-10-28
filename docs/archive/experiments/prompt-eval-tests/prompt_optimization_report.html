@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Type4Me 语音润色 Prompt 优化对比</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; background: #f5f5f7; color: #1d1d1f; padding: 24px; line-height: 1.6; }
+.container { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+.subtitle { color: #86868b; font-size: 14px; margin-bottom: 24px; }
+.summary { display: flex; gap: 16px; margin-bottom: 32px; flex-wrap: wrap; }
+.stat { background: white; border-radius: 12px; padding: 20px 24px; flex: 1; min-width: 160px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.stat .num { font-size: 36px; font-weight: 700; }
+.stat .label { color: #86868b; font-size: 13px; margin-top: 4px; }
+.stat.green .num { color: #34c759; }
+.stat.red .num { color: #ff3b30; }
+.stat.blue .num { color: #007aff; }
+
+.changes-section { background: white; border-radius: 12px; padding: 24px; margin-bottom: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.changes-section h2 { font-size: 18px; margin-bottom: 16px; }
+.changes-section .diff { background: #f0fdf4; border-left: 3px solid #34c759; padding: 12px 16px; border-radius: 6px; font-size: 13px; line-height: 1.8; white-space: pre-wrap; font-family: "SF Mono", Monaco, monospace; }
+.changes-section .diff .added { color: #16a34a; font-weight: 600; }
+.changes-section .diff .removed { color: #dc2626; text-decoration: line-through; opacity: 0.7; }
+
+.card { background: white; border-radius: 12px; margin-bottom: 20px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.card.fixed { border-left: 4px solid #34c759; }
+.card.regression { border-left: 4px solid #ff3b30; }
+.card.neutral { border-left: 4px solid #86868b; }
+.card-header { padding: 16px 20px; background: #fafafa; border-bottom: 1px solid #e5e5ea; font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.badge.fixed { background: #dcfce7; color: #16a34a; }
+.badge.regression { background: #fef2f2; color: #dc2626; }
+.badge.neutral { background: #f3f4f6; color: #6b7280; }
+.badge.issue { background: #fef3c7; color: #d97706; }
+.raw-text { padding: 12px 20px; background: #fffbeb; border-bottom: 1px solid #e5e5ea; }
+.section-label { font-size: 11px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.text-content { font-size: 14px; line-height: 1.7; }
+.comparison { display: grid; grid-template-columns: 1fr 1fr; }
+.col { padding: 16px 20px; }
+.col.old { border-right: 1px solid #e5e5ea; background: #fff; }
+.col.new { background: #f0fdf4; }
+.warn { color: #d97706; font-size: 11px; font-weight: 600; }
+@media (max-width: 768px) {
+    .comparison { grid-template-columns: 1fr; }
+    .col.old { border-right: none; border-bottom: 1px solid #e5e5ea; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>语音润色 Prompt 优化对比报告</h1>
+<p class="subtitle">生成时间: 2026-04-12 21:54 | 模型: doubao-seed-2-0-lite-260215 | 样本数: 14</p>
+
+<div class="summary">
+    <div class="stat blue"><div class="num">14</div><div class="label">总测试样本</div></div>
+    <div class="stat green"><div class="num">1</div><div class="label">问题修复</div></div>
+    <div class="stat red"><div class="num">0</div><div class="label">回归问题</div></div>
+</div>
+
+<div class="changes-section">
+<h2>Prompt 改动摘要</h2>
+<div class="diff"><span class="removed">## 结构化规则</span>
+<span class="added">## 结构化规则（优先于轻编辑原则）</span>
+<span class="added">以下格式规则在排版层面优先于"轻编辑"原则。即使原文口述了编号，也必须按实际要点数决定是否使用编号格式。</span>
+
+<span class="removed">1. ...只有 1 个要点时禁止使用编号，直接用自然段落表述</span>
+<span class="added">1. ...只有 1 个要点时禁止使用编号，即使原文口述了"第一""1."等序号词，也必须改为自然段落表述</span>
+
+<span class="removed">3. 分点标题：...（重复序号 3）</span>
+<span class="removed">3. 子项目：...</span>
+<span class="added">3. 分点标题：...</span>
+<span class="added">4. 子项目：...（序号修正）</span>
+
+<span class="added">+ 新增示例4：只有一个要点（禁止单独编号）的场景</span></div>
+</div>
+
+
+        <div class="card fixed">
+            <div class="card-header">
+                <strong>PROBLEM</strong>: 触发问题：单独的 1. 编号 <span class="badge fixed">FIXED</span> <span class="badge issue">目标问题</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (113 chars)</div>
+                <div class="text-content">我们之前做过一个公寓租金监控的项目请基于该项目已有的房源获取每个房源允许的最短租期获取租6个月的租金并保留与当前租金的对比具体要求如下1爬取说明6个月的租金通常在平台较深的入口或申请环节才能查到需要针对不同平台分别研究获取方式</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 1) <span class="warn">⚠ 单独编号</span></div>
+                    <div class="text-content">请基于我们之前做过的公寓租金监控项目已有房源，获取每个房源允许的最短租期、租 6 个月的租金，并保留该租金与当前租金的对比，具体要求如下：<br><br>1. 爬取说明：6 个月的租金通常在平台较深的入口或申请环节才能查到，需要针对不同平台分别研究获取方式。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">我们之前做过一个公寓租金监控的项目，请基于该项目已有的房源，获取每个房源允许的最短租期，获取租6个月的租金，并保留与当前租金的对比。具体要求如下：<br>爬取说明：6个月的租金通常在平台较深的入口或申请环节才能查到，需要针对不同平台分别研究获取方式。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>SYNTH_1</strong>: 口述了编号但只有一个要点 <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (40 chars)</div>
+                <div class="text-content">关于这次上线有一个注意事项第一就是一定要在凌晨两点之后再部署因为那个时候流量最低</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">关于这次上线有 1 个注意事项，一定要在凌晨 2 点之后再部署，因为该时段流量最低。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">关于这次上线，有一个注意事项，一定要在凌晨 2 点之后再部署，因为此时流量最低。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>SYNTH_2</strong>: 口述'如下'但只有一点 <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (48 chars)</div>
+                <div class="text-content">这个方案的改进点如下1我们需要把缓存从Redis换成本地LRU因为命中率太低了跨网络调用反而更慢</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">这个方案的改进点如下：我们需要把缓存从 Redis 换成本地 LRU，因为命中率太低了，跨网络调用反而更慢。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">这个方案的改进点为：需要把缓存从 Redis 换成本地 LRU，因为命中率太低，跨网络调用反而更慢。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>SYNTH_3</strong>: 正常多要点（应保留编号） <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (67 chars)</div>
+                <div class="text-content">这次迭代有三个重点第一是性能优化目标是把P99降到200毫秒以内第二是权限重构把RBAC换成ABAC第三是监控大盘要接入Grafana</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 3)</div>
+                    <div class="text-content">这次迭代有3个重点，具体如下：<br><br>1. 性能优化：目标是把 P99 降到 200 毫秒以内<br><br>2. 权限重构：把 RBAC 换成 ABAC<br><br>3. 监控大盘：要接入 Grafana</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 3)</div>
+                    <div class="text-content">这次迭代有 3 个重点：<br><br>1. 性能优化：目标是把 P99 降到 200 毫秒以内。<br><br>2. 权限重构：把 RBAC 换成 ABAC。<br><br>3. 监控大盘：要接入 Grafana。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>6E710B4B</strong>: 历史样本 (166 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (166 chars)</div>
+                <div class="text-content">我们就在现在偏好设置里面的第二行加一个设置项吧所以第二行最后会有四个设置项它的样式和交互逻辑记得跟现在其他的那些保持一致然后 剪贴板的设置还是需要 考虑到 是否有没有注入成功我记得我们现在的这个注入成功的判定是比较松的你整体回顾一下这个判定如何判定得更准最终剪贴板是如果注入没有成功那就还是得粘到剪贴板如果注入成功了那就可以 不摘呀</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">本次共有两项调整要求，具体如下：<br><br>1. 偏好设置调整：在现有偏好设置的第二行加一个设置项，添加完成后第二行会有 4 个设置项，新增设置项的样式和交互逻辑需要和现有其他设置项保持一致。<br><br>2. 剪贴板优化：剪贴板的设置需要考虑注入是否成功，当前注入成功的判定标准比较宽松，需要整体回顾优化，让判定更准确。最终规则为：如果注入没有成功，内容仍需要粘到剪贴板；如果注入成功，就可以不粘。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">当前有两项调整需求，具体如下：<br><br>1. 偏好设置：在现有偏好设置的第二行添加1个设置项，调整后第二行共有 4 个设置项，新增设置项的样式和交互逻辑需与现有其他设置项保持一致。<br><br>2. 剪贴板设置：需要优化注入成功的判定逻辑，现有判定标准较为宽松，需整体梳理调整以提升判定准确性，最终规则为：若注入未成功，内容仍粘贴到剪贴板；若注入成功，则无需粘贴到剪贴板。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>563E2C28</strong>: 历史样本 (74 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (74 chars)</div>
+                <div class="text-content">再看一下刚刚的这个识别案例。 结论里面说了三个版本，分点里面只说了两个版本。 其实两个是对的，因为实际内容只说了两个。 但可能结论没有跟它保持一致。</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">再看一下刚刚这个识别案例。结论里说了3个版本，分点里只说了2个版本。其实2个是对的，因为实际内容就只说了2个，只是结论没有和它保持一致。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">再看一下刚刚这个识别案例，结论里说了3个版本，分点里只说了2个版本。其实2个是对的，因为实际内容只说了2个，只是结论没有跟实际内容保持一致。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>AD80355D</strong>: 历史样本 (72 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (72 chars)</div>
+                <div class="text-content">算了，我们可以在这个豆包模型下面加一个选项，支持选择模型。就是跟其他交互模式一样的那个下拉框，放这两个选项。哦。放三个选项，自动还有分别各自选择</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">我们可以在 豆包 模型下方添加一个下拉框，支持选择模型，下拉框样式和其他交互模式一致，框内放置 3 个选项，包含自动以及分别选择。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">我们可以在豆包模型下方添加一个下拉框，支持选择模型，样式和其他交互模式的下拉框一致，共放置3个选项，包含自动以及分别各自选择。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>ECBCB05E</strong>: 历史样本 (56 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (56 chars)</div>
+                <div class="text-content">现在是一个很窄的框而且点不进去啊你这个改的还是有问题啊你怎么越改越错啊重新 review 一遍完整的方法要怎么改</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">现在是一个很窄的框，而且点不进去，你改的还是有问题，怎么越改越错啊？重新 review 一遍完整的方法要怎么改。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">现在是一个很窄的框，而且点不进去，你这个改的还是有问题，你怎么越改越错啊！重新 review 一遍完整的方法要怎么改？</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>F3164281</strong>: 历史样本 (45 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (45 chars)</div>
+                <div class="text-content">那为什么现在的那个模式的开和关不是对应着 keyboard 和 clipboard 的模式</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">那为什么现在模式的开和关不是对应着 keyboard 和 clipboard 的模式？</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">那为什么现在模式的开和关不是对应着 keyboard 和 clipboard 的模式？</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>7D153F25</strong>: 历史样本 (50 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (50 chars)</div>
+                <div class="text-content">还有一个细节问题是，这个辅助权限是需要重启APP的。我们现在好像没有这相关的引导，用户可能会不知道。</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">还有一个细节问题是，这个辅助权限是需要重启 APP 的。我们现在好像没有相关的引导，用户可能会不知道。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">还有一个细节问题是，这个辅助权限是需要重启 APP 的。我们现在好像没有相关的引导，用户可能会不知道。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>CA062B07</strong>: 历史样本 (156 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (156 chars)</div>
+                <div class="text-content">算了你直接把这个邮箱的去掉吧，把我们现在第一行的那个 Type for me 的那一组配置写成内置的。内置的这个样式它只是在最前面加了一个标签，以及它会随着我们版本发布放在代码里面。如果用户当前的片段替换的配置是空的，那就会出现这个内置的。如果它没有这个，它不是空的，它自己填过了，那就不出这个内置的示例就好了。</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">直接去掉邮箱相关内容，将当前第一行的 Type for me 那一组配置改为内置配置，相关说明如下：<br><br>1. 基本特性：仅在最前面加一个标签，会随版本发布放置在代码中。<br><br>2. 显示规则：a) 如果用户当前的片段替换配置为空，就显示这个内置内容；b) 如果用户当前配置不为空，已经自行填写过，就不显示这个内置示例。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 3)</div>
+                    <div class="text-content">配置修改及规则说明如下：<br><br>1. 配置调整：去掉邮箱相关内容，将第一行的 Type for me 那一组配置设置为内置配置。<br><br>2. 样式说明：内置样式仅在最前面加一个标签，会随版本发布放在代码中。<br><br>3. 显示规则：如果用户当前片段替换的配置为空，就显示该内置配置；如果配置不为空，也就是用户已经自行填写过，就不显示这个内置示例。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>770CB130</strong>: 历史样本 (165 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (165 chars)</div>
+                <div class="text-content">你梳理一下这个延迟高和体验问题，是因为什么参数导致的？我们下午在参数调优上做了不少的事情。我感觉首先是要避免说因为模型的性能要求高导致的慢。如果不是这个原因的话，我们就得好好来调一下参数了。准确率本身感觉是因为刚刚说话说的慢的时候，会有点问题，特别是标点的断句。是不是因为这个是纯流式识别，没有在识别完之后，用完整录音再识别一次？</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">需要梳理导致延迟高和体验问题的参数原因，我们下午已经在参数调优上做了不少工作，具体思路和疑问如下：<br><br>1. 原因排查要求：首先要排除“模型性能要求高导致变慢”这个原因，如果确定不是这个原因，就需要好好调试参数。<br><br>2. 准确率问题疑问：说话慢的时候准确率会出问题，尤其是标点断句环节，推测问题是不是因为当前是纯流式识别，没有在识别完成后用完整录音再识别一次？</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">需要梳理清楚延迟高和体验问题是由什么参数导致的，我们下午已经在参数调优上做了不少工作，具体内容如下：<br><br>1. 延迟问题：首先要排除模型性能要求高导致变慢这个原因，如果不是这个原因，我们就需要好好调整参数。<br><br>2. 准确率问题：说话速度慢的时候准确率会出问题，尤其是标点断句，怀疑是不是因为这是纯流式识别，没有在识别完之后用完整录音再识别一次？</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>EB890A09</strong>: 历史样本 (302 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (302 chars)</div>
+                <div class="text-content">你好我已经把我的身份证正反面照片和手持身份证的自拍照上传到了你们提供的链接但由于我希望注册的是个人开发者因此我没有提供 来自组织或者雇主的在职证明文件和公司注册文件此外关于更换设备的原因可能是因为识别到我历史曾经用另外一台手机 登录过 Developer APP但这些都是我个人的手机设备我从 iPhone 17 Pro 换成了 iPhone Air或者由于我有多台 Mac 触发了这个 警告但你可以看到这些都是在我的 Apple ID 下的设备可能是因为我在多个页面尝试都无法成功所以有尝试着更换设备但我今 天在 develop APP 发起申请后从拍照验证到同意协议的各个环节的过程中都没有更换过设备</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">我已提交个人开发者注册申请，相关情况说明如下：<br><br>1. 申请材料：已将身份证正反面照片和手持身份证自拍照上传至你们提供的链接，我申请注册的是个人开发者，因此未提供来自组织或者雇主的在职证明文件和公司注册文件。<br><br>2. 设备警告说明：本次触发更换设备警告，具体情况如下：<br>a) 所有涉及的设备均为我个人所有，历史登录过 Developer APP 的另一台手机也属于我个人，我从 iPhone 17 Pro 换成了 iPhone Air，同时拥有多台 Mac，所有设备都绑定在我的 Apple ID 下；<br>b) 此前我因在多个页面尝试申请都未成功，所以有过更换设备操作，但本次我在 Developer APP 发起申请后，从拍照验证到同意协议的各个环节都没有更换过设备。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">你好，我已经把身份证正反面照片和手持身份证的自拍照上传到了你们提供的链接。本次申请注册的是个人开发者，因此我没有提供来自组织或者雇主的在职证明文件和公司注册文件。<br><br>关于触发更换设备警告的相关说明如下：<br><br>1. 设备归属说明：识别到我历史曾经用另外一台手机登录过 Developer APP，但这些都是我个人的手机设备，我从 iPhone 17 Pro 换成了 iPhone Air，或是由于我有多台 Mac 触发了这个警告，所有这些设备都在我的 Apple ID 下。<br><br>2. 申请操作说明：我之前是因为在多个页面尝试都无法成功，才试着更换设备，但我今天在 develop APP 发起申请后，从拍照验证到同意协议的各个环节都没有更换过设备。</div>
+                </div>
+            </div>
+        </div>
+        <div class="card neutral">
+            <div class="card-header">
+                <strong>491E28CB</strong>: 历史样本 (121 chars) <span class="badge neutral">无变化</span>
+            </div>
+            <div class="raw-text">
+                <div class="section-label">原始语音文本 (121 chars)</div>
+                <div class="text-content">52和51是不错的，47那个我觉得也不要这么极端。如果错误了，就在悬浮窗上面提示 LLM 识别错误，内容以 存入剪贴板和识别历史，但 就好了，只是需要有这么个在识别窗上面不展示已完成，而是展示错误提示的 feature 就好了，不用改的那么大</div>
+            </div>
+            <div class="comparison">
+                <div class="col old">
+                    <div class="section-label">旧 Prompt 输出 (pts: 0)</div>
+                    <div class="text-content">52和51是不错的，47我觉得也不要这么极端。如果识别出错了，就在悬浮窗上面提示 LLM 识别错误，内容存入剪贴板和识别历史就好，只需要做这样的调整：在识别窗上面不展示已完成，而是展示错误提示的 feature 就好了，不用改得那么大。</div>
+                </div>
+                <div class="col new">
+                    <div class="section-label">新 Prompt 输出 (pts: 2)</div>
+                    <div class="text-content">本次关于版本调整的意见如下：<br><br>1. 版本评价：52和51是不错的，47那个我觉得也不要这么极端。<br><br>2. 修改需求：如果识别错误，就在悬浮窗上面提示 LLM 识别错误，保留存入剪贴板和识别历史就好，只需要在识别窗上面不展示已完成，而是展示错误提示的 feature 就好了，不用改得那么大。</div>
+                </div>
+            </div>
+        </div>
+</div>
+</body>
+</html>

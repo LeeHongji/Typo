@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 280" width="840" height="280">
+  <defs>
+    <style>
+      @keyframes pulse-ring-1 {
+        0% { r: 18; opacity: 0.6; }
+        100% { r: 36; opacity: 0; }
+      }
+      @keyframes pulse-ring-2 {
+        0% { r: 18; opacity: 0.4; }
+        100% { r: 44; opacity: 0; }
+      }
+      @keyframes pulse-core {
+        0%, 100% { r: 14; }
+        50% { r: 16; }
+      }
+      @keyframes bar1 { 0%,100%{height:12px;y:134} 50%{height:40px;y:120} }
+      @keyframes bar2 { 0%,100%{height:20px;y:130} 40%{height:8px;y:136} 80%{height:36px;y:122} }
+      @keyframes bar3 { 0%,100%{height:8px;y:136} 30%{height:44px;y:118} 70%{height:16px;y:132} }
+      @keyframes bar4 { 0%,100%{height:28px;y:126} 50%{height:10px;y:135} }
+      @keyframes bar5 { 0%,100%{height:6px;y:137} 35%{height:48px;y:116} 65%{height:20px;y:130} }
+      @keyframes bar6 { 0%,100%{height:18px;y:131} 25%{height:6px;y:137} 75%{height:38px;y:121} }
+      @keyframes bar7 { 0%,100%{height:32px;y:124} 45%{height:12px;y:134} 85%{height:42px;y:119} }
+      @keyframes bar8 { 0%,100%{height:10px;y:135} 55%{height:36px;y:122} }
+      @keyframes breathe {
+        0%, 100% { opacity: 0.5; }
+        50% { opacity: 1; }
+      }
+      @keyframes float-y {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-3px); }
+      }
+
+      .bg { fill: #0C0A09; }
+      .pulse-core { fill: #D6574B; animation: pulse-core 2s ease-in-out infinite; }
+      .pulse-r1 { fill: none; stroke: #D6574B; stroke-width: 1.5; animation: pulse-ring-1 2s ease-out infinite; }
+      .pulse-r2 { fill: none; stroke: #D6574B; stroke-width: 1; animation: pulse-ring-2 2.5s ease-out 0.8s infinite; }
+
+      .vis-bar { fill: #D6574B; rx: 1.5; opacity: 0.7; }
+      .b1 { animation: bar1 1.2s ease-in-out infinite; }
+      .b2 { animation: bar2 1.0s ease-in-out 0.1s infinite; }
+      .b3 { animation: bar3 1.4s ease-in-out 0.2s infinite; }
+      .b4 { animation: bar4 0.9s ease-in-out 0.05s infinite; }
+      .b5 { animation: bar5 1.3s ease-in-out 0.15s infinite; }
+      .b6 { animation: bar6 1.1s ease-in-out 0.25s infinite; }
+      .b7 { animation: bar7 1.0s ease-in-out 0.3s infinite; }
+      .b8 { animation: bar8 1.2s ease-in-out 0.08s infinite; }
+
+      .title { fill: #FAFAF9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-weight: 700; font-size: 42px; letter-spacing: -0.5px; }
+      .subtitle { fill: #A8A29E; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-weight: 400; font-size: 16px; }
+      .tagline { fill: #D6574B; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-weight: 500; font-size: 14px; letter-spacing: 2px; }
+
+      .badge-bg { fill: #1C1917; stroke: #292524; stroke-width: 1; }
+      .badge-val { fill: #FAFAF9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 600; }
+      .badge-dot { fill: #6CB36C; animation: breathe 2s ease-in-out infinite; }
+
+      .divider { stroke: #292524; stroke-width: 1; }
+      .float { animation: float-y 4s ease-in-out infinite; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" width="840" height="280" rx="12"/>
+  <rect x="0" y="0" width="840" height="1" rx="0" fill="#D6574B" opacity="0.3"/>
+
+  <!-- Left: Pulse + visualizer -->
+  <g class="float" transform="translate(100, 0)">
+    <circle class="pulse-r2" cx="0" cy="140" r="18"/>
+    <circle class="pulse-r1" cx="0" cy="140" r="18"/>
+    <circle class="pulse-core" cx="0" cy="140" r="14"/>
+
+    <rect class="vis-bar b3" x="50" y="136" width="3" height="8"/>
+    <rect class="vis-bar b1" x="57" y="134" width="3" height="12"/>
+    <rect class="vis-bar b5" x="64" y="137" width="3" height="6"/>
+    <rect class="vis-bar b2" x="71" y="130" width="3" height="20"/>
+    <rect class="vis-bar b7" x="78" y="124" width="3" height="32"/>
+    <rect class="vis-bar b4" x="85" y="126" width="3" height="28"/>
+    <rect class="vis-bar b6" x="92" y="131" width="3" height="18"/>
+    <rect class="vis-bar b8" x="99" y="135" width="3" height="10"/>
+    <rect class="vis-bar b1" x="106" y="134" width="3" height="12"/>
+    <rect class="vis-bar b5" x="113" y="137" width="3" height="6"/>
+    <rect class="vis-bar b3" x="120" y="136" width="3" height="8"/>
+    <rect class="vis-bar b7" x="127" y="124" width="3" height="32"/>
+    <rect class="vis-bar b2" x="134" y="130" width="3" height="20"/>
+    <rect class="vis-bar b4" x="141" y="126" width="3" height="28"/>
+    <rect class="vis-bar b8" x="148" y="135" width="3" height="10"/>
+    <rect class="vis-bar b6" x="155" y="131" width="3" height="18"/>
+  </g>
+
+  <line class="divider" x1="310" y1="60" x2="310" y2="220"/>
+
+  <!-- Right: Text -->
+  <text class="tagline" x="345" y="95">MACOS VOICE INPUT</text>
+  <text class="title" x="345" y="145">Type4Me</text>
+  <text class="subtitle" x="345" y="175">说话即输入。本地识别，隐私无忧，完全免费。</text>
+
+  <!-- Badges -->
+  <g transform="translate(345, 200)">
+    <rect class="badge-bg" x="0" y="0" width="90" height="24" rx="12"/>
+    <circle class="badge-dot" cx="14" cy="12" r="3"/>
+    <text class="badge-val" x="22" y="16">本地识别</text>
+
+    <rect class="badge-bg" x="100" y="0" width="100" height="24" rx="12"/>
+    <circle class="badge-dot" cx="114" cy="12" r="3"/>
+    <text class="badge-val" x="122" y="16">7 云端引擎</text>
+
+    <rect class="badge-bg" x="210" y="0" width="70" height="24" rx="12"/>
+    <circle class="badge-dot" cx="224" cy="12" r="3"/>
+    <text class="badge-val" x="232" y="16">免费</text>
+
+    <rect class="badge-bg" x="290" y="0" width="90" height="24" rx="12"/>
+    <circle class="badge-dot" cx="304" cy="12" r="3"/>
+    <text class="badge-val" x="312" y="16">开源</text>
+  </g>
+</svg>

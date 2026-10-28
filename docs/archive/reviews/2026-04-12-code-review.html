@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Type4Me 代码评估报告 — 2026.04.12 (已修复)</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --border: #2e3345;
+    --text: #e2e4eb;
+    --text2: #9198ab;
+    --accent: #6c8aff;
+    --critical: #ff4d6a;
+    --critical-bg: rgba(255,77,106,0.08);
+    --high: #ff8c42;
+    --high-bg: rgba(255,140,66,0.08);
+    --medium: #ffd166;
+    --medium-bg: rgba(255,209,102,0.06);
+    --low: #6bcb77;
+    --low-bg: rgba(107,203,119,0.06);
+    --good: #4ecdc4;
+    --fixed: #4ecdc4;
+    --fixed-bg: rgba(78,205,196,0.08);
+    --skipped: #9198ab;
+    --skipped-bg: rgba(145,152,171,0.06);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 0;
+  }
+
+  /* Hero */
+  .hero {
+    padding: 80px 40px 60px;
+    text-align: center;
+    background: linear-gradient(180deg, #161a26 0%, var(--bg) 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  .hero h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 12px;
+  }
+  .hero .subtitle {
+    color: var(--text2);
+    font-size: 1.05rem;
+    max-width: 640px;
+    margin: 0 auto 32px;
+  }
+  .stats-row {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    flex-wrap: wrap;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 28px;
+    min-width: 130px;
+    text-align: center;
+  }
+  .stat-card .num {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .stat-card .label {
+    font-size: 0.82rem;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+  }
+  .stat-card.critical .num { color: var(--critical); }
+  .stat-card.high .num { color: var(--high); }
+  .stat-card.medium .num { color: var(--medium); }
+  .stat-card.low .num { color: var(--low); }
+
+  /* Layout */
+  .container {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* Section headers */
+  .section-header {
+    padding: 56px 0 24px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  .section-header h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .section-header p {
+    color: var(--text2);
+    margin-top: 8px;
+    font-size: 0.95rem;
+  }
+
+  /* Issue cards */
+  .issue {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    margin-bottom: 20px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .issue:hover { border-color: #444b60; }
+  .issue.critical { border-left: 3px solid var(--critical); background: var(--critical-bg); }
+  .issue.high { border-left: 3px solid var(--high); background: var(--high-bg); }
+  .issue.medium { border-left: 3px solid var(--medium); background: var(--medium-bg); }
+  .issue.low { border-left: 3px solid var(--low); background: var(--low-bg); }
+  .issue.fixed { border-left: 3px solid var(--fixed); background: var(--fixed-bg); opacity: 0.7; }
+  .issue.skipped { border-left: 3px solid var(--skipped); background: var(--skipped-bg); opacity: 0.6; }
+  .fixed-badge, .skipped-badge {
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px;
+    padding: 3px 8px; border-radius: 5px; margin-left: 8px; white-space: nowrap;
+  }
+  .fixed-badge { background: var(--fixed); color: #1a1d27; }
+  .skipped-badge { background: var(--skipped); color: #1a1d27; }
+
+  .issue-header {
+    padding: 20px 24px 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .severity-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .critical .severity-badge { background: var(--critical); color: #fff; }
+  .high .severity-badge { background: var(--high); color: #1a1d27; }
+  .medium .severity-badge { background: var(--medium); color: #1a1d27; }
+  .low .severity-badge { background: var(--low); color: #1a1d27; }
+
+  .issue-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .issue-body {
+    padding: 16px 24px 20px;
+  }
+  .issue-body p {
+    color: var(--text2);
+    font-size: 0.92rem;
+    margin-bottom: 12px;
+  }
+  .issue-body p:last-child { margin-bottom: 0; }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 14px;
+  }
+  @media (max-width: 600px) {
+    .detail-grid { grid-template-columns: 1fr; }
+    .hero { padding: 48px 20px 40px; }
+    .hero h1 { font-size: 1.6rem; }
+    .stats-row { gap: 12px; }
+    .stat-card { padding: 14px 18px; min-width: 100px; }
+  }
+
+  .detail-box {
+    background: var(--surface2);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .detail-box.full { grid-column: 1 / -1; }
+  .detail-box .dt {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text2);
+    margin-bottom: 6px;
+  }
+  .detail-box .dd {
+    font-size: 0.9rem;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  /* Scenario table */
+  .scenario-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    font-size: 0.9rem;
+  }
+  .scenario-table th {
+    text-align: left;
+    font-weight: 600;
+    padding: 12px 16px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text2);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .scenario-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .scenario-table tr:last-child td { border-bottom: none; }
+  .risk-tag {
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+  }
+  .risk-tag.r-critical { background: var(--critical); color: #fff; }
+  .risk-tag.r-high { background: var(--high); color: #1a1d27; }
+  .risk-tag.r-medium { background: var(--medium); color: #1a1d27; }
+
+  /* Priority list */
+  .priority-list {
+    counter-reset: priority;
+    list-style: none;
+    padding: 0;
+  }
+  .priority-list li {
+    counter-increment: priority;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 22px 18px 60px;
+    margin-bottom: 12px;
+    position: relative;
+    font-size: 0.95rem;
+  }
+  .priority-list li::before {
+    content: counter(priority);
+    position: absolute;
+    left: 20px;
+    top: 18px;
+    width: 28px;
+    height: 28px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .priority-list li strong { color: var(--text); }
+  .priority-list li span { color: var(--text2); }
+
+  /* Good stuff */
+  .good-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .good-item:last-child { border-bottom: none; }
+  .good-check {
+    color: var(--good);
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .good-item p { color: var(--text2); font-size: 0.92rem; }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text2);
+    font-size: 0.82rem;
+    border-top: 1px solid var(--border);
+    margin-top: 60px;
+  }
+
+  /* Method badge */
+  .method-row {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+  }
+  .method-badge {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 0.82rem;
+    color: var(--text2);
+  }
+  .method-badge strong { color: var(--text); }
+</style>
+</head>
+<body>
+<div style="margin:16px auto;max-width:1100px;padding:12px 16px;border:1px solid #ffd166;border-radius:10px;background:rgba(255,209,102,.08);color:#ffd166;">
+  归档文档 · 历史代码审查（2026-04-12）：内容对应当时代码快照，不代表当前实现。当前文档入口：<code>docs/README.md</code>。
+</div>
+
+<!-- Hero -->
+<div class="hero">
+  <h1>Type4Me 代码评估报告</h1>
+  <p class="subtitle">
+    纯净版 (云端 BYOK) + 本地版 (SenseVoice + Qwen3-ASR) 全量代码审查<br>
+    聚焦快速启停、提示音、剪贴板、Esc 取消等核心体验场景
+  </p>
+  <div class="stats-row">
+    <div class="stat-card" style="border-color:var(--fixed)"><div class="num" style="color:var(--fixed)">27</div><div class="label">已修复</div></div>
+    <div class="stat-card" style="border-color:var(--skipped)"><div class="num" style="color:var(--skipped)">3</div><div class="label">跳过</div></div>
+    <div class="stat-card low"><div class="num">6</div><div class="label">未改 Low</div></div>
+  </div>
+  <div class="stats-row" style="margin-top:12px">
+    <div class="stat-card critical"><div class="num" style="text-decoration:line-through;opacity:0.5">1</div><div class="label">Critical</div></div>
+    <div class="stat-card high"><div class="num" style="text-decoration:line-through;opacity:0.5">5</div><div class="label">High</div></div>
+    <div class="stat-card medium"><div class="num" style="text-decoration:line-through;opacity:0.5">14</div><div class="label">Medium</div></div>
+    <div class="stat-card low"><div class="num" style="text-decoration:line-through;opacity:0.5">16</div><div class="label">Low</div></div>
+  </div>
+  <div class="method-row">
+    <div class="method-badge"><strong>Claude</strong> 核心路径审查</div>
+    <div class="method-badge"><strong>Claude</strong> ASR Provider 审查</div>
+    <div class="method-badge"><strong>Claude</strong> 服务层审查</div>
+    <div class="method-badge"><strong>Codex (GPT-5.4)</strong> 独立审查</div>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ============================================ -->
+<!-- CRITICAL -->
+<!-- ============================================ -->
+<div class="section-header">
+  <h2><span style="color:var(--critical)">&#9679;</span> Critical — 必须立刻修复</h2>
+  <p>直接影响核心使用流程，日常操作中可以触发</p>
+</div>
+
+<div class="issue critical">
+  <div class="issue-header">
+    <span class="severity-badge">Critical</span>
+    <div class="issue-title">快速按停或 Esc 时，录音其实没被取消 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>当你按下快捷键开始录音后，如果在半秒内立刻松开(或者在"准备中"阶段按 Esc)，界面会回到待机状态，但后台的录音 session 实际上还在跑。它会一直录音直到和 ASR 服务器的连接建立完成，然后才发现"哦，界面已经不需要我了"，这时才自行清理。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">怎么触发</div>
+        <div class="dd">快速双击录音快捷键，或开始后立刻按 Esc。在网络慢的时候更容易触发(连接建立需要更长时间)。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">看起来已经取消了，但麦克风其实还在监听。可能产生一段"幽灵录音"，甚至在下一次正常录音时出现干扰。</div>
+      </div>
+      <div class="detail-box full">
+        <div class="dt">修复方案</div>
+        <div class="dd">问题出在 UI 层取消时调的是"停止录音"方法，而这个方法只在"正在录音"状态才生效，对"正在启动"状态无效。代码里其实已经有一个"取消录音"方法可以处理启动阶段，只是没被调用到。让 UI 层在"准备中"阶段的取消走"取消录音"而非"停止录音"即可。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<!-- HIGH -->
+<!-- ============================================ -->
+<div class="section-header">
+  <h2><span style="color:var(--high)">&#9679;</span> High — 需要尽快修复</h2>
+  <p>不一定每次都触发，但一旦触发会严重影响体验或可靠性</p>
+</div>
+
+<div class="issue high">
+  <div class="issue-header">
+    <span class="severity-badge">High</span>
+    <div class="issue-title">App 崩溃或强退后，系统音量卡在被压低的状态 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>Type4Me 在录音时会自动压低系统音量(避免提示音被录进去)。如果录音中 app 崩溃或被 Force Quit，音量不会恢复。更麻烦的是，下次启动 app 时也不会检查是否有上次残留的音量修改需要恢复。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">怎么触发</div>
+        <div class="dd">录音中 app 崩溃，或用户在录音时 Cmd+Q 退出。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">系统音量一直偏低，用户可能困惑为什么声音变小了，不会联想到是 Type4Me 导致的。</div>
+      </div>
+      <div class="detail-box full">
+        <div class="dt">修复方案</div>
+        <div class="dd">代码里已经有"恢复音量"方法和"启动时检查是否需要恢复"的逻辑，只是从未被调用。在 app 启动时调用一次检查恢复，在 app 退出时主动恢复音量即可。两行代码的事。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue high">
+  <div class="issue-header">
+    <span class="severity-badge">High</span>
+    <div class="issue-title">Qwen3 本地识别服务崩溃后不会自动重启 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>本地版的 Qwen3-ASR 跑在一个独立的 Python 进程里。如果这个进程因为内存不足或其他原因崩溃了，Type4Me 不知道。它还记着那个已经死掉的端口号，后续每次录音都会连接失败，直到用户手动重启整个 app。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">怎么触发</div>
+        <div class="dd">长时间使用后 Python 进程 OOM，或者模型推理中遇到异常导致 crash。在 Apple Silicon 上 Metal GPU 偶尔会出现推理异常。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">录音后长时间无结果，或者直接报错。用户不知道是 ASR 服务挂了，只能尝试重启 app。</div>
+      </div>
+      <div class="detail-box full">
+        <div class="dt">修复方案</div>
+        <div class="dd">监听子进程的退出事件。如果是非正常退出(非零退出码)，自动重启服务或清除端口并在状态栏给用户一个提示。同时加上 SIGTERM 后的 SIGKILL 兜底，防止进程卡死。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue high">
+  <div class="issue-header">
+    <span class="severity-badge">High</span>
+    <div class="issue-title">上一轮还没彻底结束时，新一轮录音就能启动 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>当识别结果出来后，Type4Me 会经历"注入文字 → 恢复剪贴板 → 保存历史"的收尾流程。但界面在注入文字之前就显示"完成"并允许新的录音了。如果用户在看到"完成"后极快地再次按下快捷键，新 session 会和旧 session 的收尾流程撞在一起。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">怎么触发</div>
+        <div class="dd">"Done" 出现后立刻开始下一轮录音，在快速连续听写场景下(比如逐句翻译)容易触发。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">新一轮录音启动失败或被阻塞，界面显示"准备中"但一直不开始录音。</div>
+      </div>
+      <div class="detail-box full">
+        <div class="dt">修复方案</div>
+        <div class="dd">在后台 session 真正回到空闲状态之前，保持 UI 在"处理中"状态，不允许新录音。或者加一个"是否可以开始"的门控检查。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue high">
+  <div class="issue-header">
+    <span class="severity-badge">High</span>
+    <div class="issue-title">本地 ASR 的后台识别任务在 session 结束后仍在运行 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>本地 SenseVoice 引擎会在后台启动多个异步识别任务(对音频分段做 decode)。当录音被快速中止时，这些后台任务不会被取消。它们的迟到结果可能写入到下一轮录音的数据中，造成文字混淆。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">怎么触发</div>
+        <div class="dd">用本地引擎快速 start/stop/start，尤其是在 SenseVoice 正在做 partial decode 时中止。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">新一轮识别结果中混入上一轮的文字片段，结果不准确但难以复现。</div>
+      </div>
+      <div class="detail-box full">
+        <div class="dt">修复方案</div>
+        <div class="dd">给每轮录音一个唯一标识(generation token)。后台任务完成后检查标识是否匹配当前 session，不匹配则丢弃结果。同时在 disconnect 时主动取消正在运行的任务。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue high">
+  <div class="issue-header">
+    <span class="severity-badge">High</span>
+    <div class="issue-title">网络断开时，多个云端引擎假装识别成功了 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>火山、Soniox、ElevenLabs 等引擎在判断"录音是否正常结束"时，用的是"有没有发过音频"这个条件。只要发过音频，WebSocket 断开就被当成正常结束。但 Wi-Fi 切换、VPN 掉线也会导致 WebSocket 断开，此时真正的识别结果还没回来。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">怎么触发</div>
+        <div class="dd">录音过程中 Wi-Fi 短暂断开、切换网络、VPN 掉线、代理 reset。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">界面显示识别完成，但结果是不完整的(丢了最后几秒)，用户不知道出了问题。对比: Deepgram 和 AssemblyAI 正确地使用了"我主动请求了关闭"这个标志来判断，不会误判。</div>
+      </div>
+      <div class="detail-box full">
+        <div class="dt">修复方案</div>
+        <div class="dd">改为只在用户主动停止录音后才把 WebSocket 关闭视为正常结束。非预期的关闭应该报告为传输错误，让上层决定是重试、用已有结果还是提示用户。参考 Deepgram 已有的 "didRequestClose" 模式。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<!-- MEDIUM -->
+<!-- ============================================ -->
+<div class="section-header">
+  <h2><span style="color:var(--medium)">&#9679;</span> Medium — 应该修复</h2>
+  <p>功能缺陷或体验瑕疵，不紧急但值得排期处理</p>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">本地 VAD 每次处理都丢弃少量音频尾巴 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>本地 SenseVoice 的语音活动检测(VAD)要求每次处理 512 个采样点。但每次送入的音频不一定能被 512 整除，尾巴部分(最多 511 个采样)被直接丢弃了。每秒累积丢失约 40ms 音频。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">长录音中可能遗漏个别字尾或短音节，VAD 判断也可能因为不完整数据而偏移。影响不大但可以避免。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">维护一个残余缓冲区，把不足 512 的尾部暂存，下次处理时拼在开头。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">内置 ASR 纠错规则从来没有生效过(隐蔽 bug) <span class="skipped-badge">跳过</span></div>
+  </div>
+  <div class="issue-body">
+    <p>Type4Me 有一套内置的 ASR 纠错规则(比如把"可落的"纠正为"Claude"，把"安索碧客"纠正为"Anthropic"等)。但代码在应用纠错规则时只读取用户自定义的规则，内置规则从未被加载。注释写的是"应用内置+用户规则"，实现只用了用户规则。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">那些精心准备的默认纠错规则一直没有在起作用。对于没有手动添加规则的用户来说，整个纠错功能形同虚设。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">在编译规则时，同时加载内置规则和用户规则并合并(用户规则优先)。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">提示音播放存在理论上的线程安全问题 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>提示音模块在预加载音频缓存和查询音效时长时，缺少一致的线程保护。冷启动时如果预加载和第一次按键几乎同时发生，缓存可能在被写入的同时被读取。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">极罕见的时序窗口，实际影响是第一次按键可能用默认时长(500ms)而非真实音效时长。不会崩溃，但不够干净。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">读取缓存时也通过同一个串行队列同步访问。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">剪贴板恢复太快，Electron 应用可能粘贴到旧内容 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>识别文字通过剪贴板粘贴后，Type4Me 在约 150ms 后就把剪贴板恢复成原来的内容。但 VS Code、Slack、Notion、飞书这类 Electron 应用读取剪贴板可能需要 200-500ms，导致它们读到的是恢复后的旧内容而非识别结果。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">在某些慢应用中，粘贴的不是识别文字而是之前复制的内容。用户需要关闭"保留剪贴板"设置来绕过。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">通过监听剪贴板变更计数来判断目标应用是否已经读取完毕，或者对 Electron 类应用适当延长等待时间。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">在不可编辑区域误报粘贴成功 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>当 Type4Me 找不到当前应用的可编辑区域时(比如焦点在 Finder 桌面上)，默认认为粘贴成功了。然后它恢复了旧剪贴板，识别出来的文字就这样悄悄消失了。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">用户以为文字被粘贴了，但实际上哪里都没贴进去，识别结果也不在剪贴板里了。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">没有正向证据确认粘贴成功时，默认改为"已复制到剪贴板"模式，保留识别文字在剪贴板中。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">LLM 后处理可能永久卡住 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>LLM 修正(豆包/Claude)在连接建立后，没有对每一段返回数据设超时。如果 LLM 服务端接受了请求但迟迟不返回(排队、限流等)，界面会一直显示"处理中"。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">录音完成后界面一直转圈。只能按 Esc 强制取消(但取消后直接跳过 LLM 处理，用原始文本)。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">加入资源级超时(比如总共最多等 30 秒)，超时后自动回退到原始识别结果。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">Claude API 流式返回错误时被静默忽略 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>Claude LLM 客户端的 SSE 流解析只处理了正常的文本片段和结束信号。如果 Anthropic API 在生成中途发送错误事件(比如触发了限流)，错误被直接跳过，返回不完整的文本。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">LLM 后处理返回截断的、不完整的文字，用户不知道出了问题。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">在 SSE 解析中增加对 "error" 事件类型的处理，遇到时抛出错误让上层回退到原始文本。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">本地 ASR 连接可能陷入无限递归 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>当 Qwen3 服务没在运行时，连接逻辑会先启动服务然后递归调用自己重试连接。如果服务进程启动了但端口分配失败(比如端口冲突)，递归永远不会终止。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">极端情况下 app 栈溢出崩溃。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">改用循环 + 最大重试次数代替递归。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">Fn 键作为快捷键时处理不完整 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>热键管理器识别 Fn 键为修饰键，但在判断"是否还有其他修饰键被同时按下"时遗漏了 Fn 标志。导致 Fn 单独绑定时可能无法正确匹配。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">把 Fn 设为录音快捷键的用户可能发现快捷键不灵或需要额外组合键才能触发。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">在修饰键标志映射中补上 Fn 键的对应关系。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">百炼 ASR 连接失败时等待 5 秒才报错 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>百炼(Bailian)的 WebSocket 代理缺少网络错误回调。当 DNS 解析失败或网络不可达时，不会立刻通知连接门控，而是等到 5 秒超时才报错。Deepgram 和百度的实现没有这个问题。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">在无网络时使用百炼引擎，需要等 5 秒才看到错误提示。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">在 WebSocket 代理中增加网络错误回调，立即通知门控连接失败。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">OpenAI Whisper 对极短录音可能产生幻听 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>OpenAI 引擎对不到 1 秒的录音没有最小时长检查。Whisper 模型对极短音频容易"幻听"出不存在的常见短语。本地 SenseVoice 引擎已经有这个保护。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">误触后看到莫名其妙的识别结果被粘贴进去。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">加入最小录音时长检查(如 0.5 秒)，低于阈值直接返回空结果。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">清理残留进程时可能误杀其他程序 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>当 Type4Me 非正常退出后，下次启动会根据保存的 PID 清理上次残留的 Python 进程。但 macOS 会复用 PID，如果上次的 PID 已被分配给其他程序，Type4Me 会杀掉那个无辜的程序。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">用户正在运行的其他 Python 脚本或程序可能被意外终止。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">在 kill 之前验证目标进程的可执行文件路径或进程名是否匹配预期。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">切换构建变体时需手动清缓存 <span class="skipped-badge">跳过</span></div>
+  </div>
+  <div class="issue-body">
+    <p>Swift Package Manager 会缓存 Package.swift 的解析结果。手动在纯净版和本地版之间切换时，如果不清除缓存，可能编译出混合了两种功能的异常版本。打包脚本已经处理了这个问题，但手动构建时容易忘。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">只影响开发者，不影响最终用户。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">在 Package.swift 中加入状态哈希检查，或添加构建前脚本自动检测。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="issue medium">
+  <div class="issue-header">
+    <span class="severity-badge">Medium</span>
+    <div class="issue-title">自动更新删除旧版后复制失败会丢失 app <span class="skipped-badge">跳过</span></div>
+  </div>
+  <div class="issue-body">
+    <p>更新流程是先删除旧 app 再复制新 app。如果磁盘在删除后变为只读(磁盘故障)或空间不足导致复制失败，回滚机制虽然存在但如果也失败了，app 就丢了。</p>
+    <div class="detail-grid">
+      <div class="detail-box">
+        <div class="dt">用户体验影响</div>
+        <div class="dd">极端硬件故障场景下 app 消失，需要重新下载安装。</div>
+      </div>
+      <div class="detail-box">
+        <div class="dt">修复方案</div>
+        <div class="dd">先复制新版本到临时位置并验证完整性，成功后再替换旧版本。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<!-- LOW -->
+<!-- ============================================ -->
+<div class="section-header">
+  <h2><span style="color:var(--low)">&#9679;</span> Low — 可以改进</h2>
+  <p>代码质量、防御性编程、小体验瑕疵</p>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">提示音模块有未使用的死代码 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>两个声明了但从未使用的属性: <code>activePlayer</code> 和 <code>cachedWAVData</code>。不影响功能，但增加维护成本。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">部分音效风格的开始和停止用了同一个声音</div>
+  </div>
+  <div class="issue-body">
+    <p>pluck、submerge、pong 三种音效在开始录音和停止录音时播放完全相同的声音，纯靠界面 UI 区分状态。可能是有意设计，但可以考虑做轻微区分(如音高或音量差异)。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">文字注入引擎标记为线程安全但缺少同步保护</div>
+  </div>
+  <div class="issue-body">
+    <p>实际运行中调用方保证了串行执行，所以没有问题。但如果未来修改了调用方式，可能引入竞态。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">剪贴板保存不包含图片/文件类型(有意设计)</div>
+  </div>
+  <div class="issue-body">
+    <p>复制了截图后使用 Type4Me，恢复剪贴板时图片会丢失。代码注释解释了原因: 读取二进制类型可能触发惰性数据提供者，阻塞线程。合理取舍。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">批量回退 30 秒超时期间无细粒度进度反馈</div>
+  </div>
+  <div class="issue-body">
+    <p>当流式识别失败回退到批量模式时，有 30 秒的总超时。期间用户只能看到"处理中"，没有更细的进度提示。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">OpenAI / SenseVoice 音频缓冲区无上限 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>批量模式引擎累积整段录音在内存中。5 分钟约 10MB，可接受。但如果用户忘记关录音，理论上会一直增长。建议在 session 层加最大录音时长限制。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">火山协议 gzip 解压用了不完全匹配的算法</div>
+  </div>
+  <div class="issue-body">
+    <p>当前连接使用无压缩模式所以不触发。但如果未来服务端返回 gzip 压缩数据，解压会失败。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">ElevenLabs 静默忽略限流和错误消息 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>session 时长超限、音频活动不足等服务端提示被丢弃。免费用户触发限制时不会看到任何提示。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">文本规范化函数在 6 个文件中重复定义</div>
+  </div>
+  <div class="issue-body">
+    <p>DRY 违反。6 个协议文件中有几乎一模一样的文本后处理函数。可以抽取为共享工具方法。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">WebSocket 连接门控的超时任务会短暂延长对象生命周期</div>
+  </div>
+  <div class="issue-body">
+    <p>timeout task 持有 gate 的强引用。如果 gate 在 5 秒超时前被释放，会被 task 保持存活。有限时间泄漏，不严重。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">URLSession 预热只对部分引擎有效</div>
+  </div>
+  <div class="issue-body">
+    <p>需要 delegate 的引擎每次录音都新建 URLSession，无法享受共享 session 的 TCP/TLS 预热。增加约 50-150ms 首次连接延迟。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">模型解压会阻塞管理器的其他操作</div>
+  </div>
+  <div class="issue-body">
+    <p>解压大模型(700MB)时，模型管理器的所有其他方法调用排队等待。不影响录音功能但可能让 UI 查询状态时短暂卡顿。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">大模型下载前不检查磁盘空间 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>磁盘空间不足时会下载成功但解压失败，留下部分文件。建议在下载前检查可用空间。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">获取选中文本的超时对 Electron 应用太短 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>200ms 的辅助功能查询超时对原生 app 够用，但 VS Code、Slack 等 Electron 应用可能需要 300-500ms。导致"命令模式"中的 {selected} 变量在这些应用中总是空的。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">历史记录计数查询用了字符串拼接而非参数化 <span class="fixed-badge">已修复</span></div>
+  </div>
+  <div class="issue-body">
+    <p>虽然输入是日期格式(不可能被注入)，但违反了参数化查询的最佳实践。其他数据库操作都用了参数化。</p>
+  </div>
+</div>
+
+<div class="issue low">
+  <div class="issue-header">
+    <span class="severity-badge">Low</span>
+    <div class="issue-title">Debug 日志 API 容易意外泄露敏感信息</div>
+  </div>
+  <div class="issue-body">
+    <p>当前没有泄露，但 API 设计上没有防护，未来开发者容易不小心把包含 API Key 的对象写入日志。</p>
+  </div>
+</div>
+
+<!-- ============================================ -->
+<!-- Scenario summary -->
+<!-- ============================================ -->
+<div class="section-header">
+  <h2>按使用场景汇总</h2>
+  <p>日常使用中最可能触发问题的场景和对应风险</p>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:20px;">
+<table class="scenario-table">
+  <thead>
+    <tr>
+      <th>使用场景</th>
+      <th>涉及问题</th>
+      <th>风险</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>快速按停 (< 0.5s)</strong><br><span style="color:var(--text2);font-size:0.85rem">开始后立即取消</span></td>
+      <td>录音未被取消(C1)、session 重叠(H3)、decode 残留(H4)</td>
+      <td><span class="risk-tag r-critical">Critical</span></td>
+    </tr>
+    <tr>
+      <td><strong>多次连续启停</strong><br><span style="color:var(--text2);font-size:0.85rem">快速反复切换录音</span></td>
+      <td>录音未被取消(C1)、session 重叠(H3)、VAD 音频丢失(M1)</td>
+      <td><span class="risk-tag r-high">High</span></td>
+    </tr>
+    <tr>
+      <td><strong>Esc 键取消</strong><br><span style="color:var(--text2);font-size:0.85rem">准备阶段 / 录音中 / 处理中</span></td>
+      <td>准备阶段 Esc 无效(C1)，处理阶段可能来不及取消(已有良好缓解)</td>
+      <td><span class="risk-tag r-critical">Critical</span></td>
+    </tr>
+    <tr>
+      <td><strong>网络不稳定</strong><br><span style="color:var(--text2);font-size:0.85rem">Wi-Fi 切换、VPN 掉线</span></td>
+      <td>假装成功(H5)、百炼 5 秒等待(M10)</td>
+      <td><span class="risk-tag r-high">High</span></td>
+    </tr>
+    <tr>
+      <td><strong>本地 ASR 长期运行</strong><br><span style="color:var(--text2);font-size:0.85rem">Qwen3 服务稳定性</span></td>
+      <td>崩溃无重启(H2)、递归卡死(M8)、PID 误杀(M12)</td>
+      <td><span class="risk-tag r-high">High</span></td>
+    </tr>
+    <tr>
+      <td><strong>在 Electron 应用中使用</strong><br><span style="color:var(--text2);font-size:0.85rem">VS Code / Slack / 飞书</span></td>
+      <td>剪贴板恢复太快(M4)、AX 超时太短(L14)</td>
+      <td><span class="risk-tag r-medium">Medium</span></td>
+    </tr>
+    <tr>
+      <td><strong>App 异常退出</strong><br><span style="color:var(--text2);font-size:0.85rem">崩溃 / Force Quit</span></td>
+      <td>音量不恢复(H1)</td>
+      <td><span class="risk-tag r-high">High</span></td>
+    </tr>
+    <tr>
+      <td><strong>LLM 后处理</strong><br><span style="color:var(--text2);font-size:0.85rem">豆包 / Claude 修正</span></td>
+      <td>无超时(M6)、错误静默(M7)</td>
+      <td><span class="risk-tag r-medium">Medium</span></td>
+    </tr>
+    <tr>
+      <td><strong>提示音</strong><br><span style="color:var(--text2);font-size:0.85rem">冷启动时序</span></td>
+      <td>缓存竞态(M3)、同音效(L2)</td>
+      <td><span class="risk-tag r-medium">Medium</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ============================================ -->
+<!-- Priorities -->
+<!-- ============================================ -->
+<div class="section-header">
+  <h2>优先修复建议 Top 5</h2>
+  <p>按影响面和修复成本综合排序</p>
+</div>
+
+<ol class="priority-list">
+  <li><strong>统一取消方法</strong> <span>— 让"准备中"阶段的取消走正确的代码路径。这是日常使用中最容易触发的问题，修复成本低(改几行路由逻辑)。</span></li>
+  <li><strong>启动时恢复系统音量</strong> <span>— 两行代码。在启动时检查+恢复，在退出时主动恢复。防止崩溃后音量卡住。</span></li>
+  <li><strong>Qwen3 进程加崩溃监控</strong> <span>— 监听子进程退出事件，异常时自动重启。本地版用户的核心稳定性保障。</span></li>
+  <li><strong>WebSocket 异常断连不再假装成功</strong> <span>— 改用显式标志判断正常关闭。影响 3 个引擎，修改模式统一。</span></li>
+  <li><strong>加载 builtin snippets</strong> <span>— 一行代码的改动。让内置纠错规则真正生效，直接提升所有用户的识别质量。</span></li>
+</ol>
+
+<!-- ============================================ -->
+<!-- Positives -->
+<!-- ============================================ -->
+<div class="section-header">
+  <h2 style="color:var(--good)">做得好的地方</h2>
+  <p>四路审查一致认可的设计亮点</p>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 24px;">
+  <div class="good-item">
+    <span class="good-check">&#10003;</span>
+    <p><strong>Session Generation 防僵尸机制</strong> — 每次录音有唯一 generation ID，异步操作完成后校验 ID 是否匹配当前 session，过期操作自动丢弃。精巧地防止了大部分快速启停的竞态问题。</p>
+  </div>
+  <div class="good-item">
+    <span class="good-check">&#10003;</span>
+    <p><strong>AudioChunkBuffer 解决连接延迟问题</strong> — 在 ASR 连接建立之前录到的音频不会丢失，而是被缓冲起来在连接建立后一次性发出。这个设计消除了"开头几秒没被识别"的问题。</p>
+  </div>
+  <div class="good-item">
+    <span class="good-check">&#10003;</span>
+    <p><strong>提示音 Grace Period</strong> — 播放开始提示音时有一个静音宽限期，期间的音频不被 VAD 判定为语音。防止提示音本身触发识别。双重保护: client 端也会跳过前几帧。</p>
+  </div>
+  <div class="good-item">
+    <span class="good-check">&#10003;</span>
+    <p><strong>Actor 隔离模型正确</strong> — 核心 session 状态机用 Swift Actor 实现，保证了状态转换的串行性。没有发现真正的并发数据竞争(严格意义上的 bug)。</p>
+  </div>
+  <div class="good-item">
+    <span class="good-check">&#10003;</span>
+    <p><strong>Keychain 凭证管理</strong> — API Key 等敏感信息正确地存储在 macOS Keychain 中，非敏感配置存在权限受限的文件里。迁移逻辑完整。</p>
+  </div>
+  <div class="good-item">
+    <span class="good-check">&#10003;</span>
+    <p><strong>协议层实现准确</strong> — 火山引擎的二进制协议编解码(header 位操作、大端序)经逐行审查确认完全对称，无 off-by-one 错误。</p>
+  </div>
+  <div class="good-item">
+    <span class="good-check">&#10003;</span>
+    <p><strong>批量回退机制</strong> — 流式识别失败时自动回退到批量模式(用缓存的完整音频重新请求)。用户不需要手动重试。</p>
+  </div>
+</div>
+
+</div><!-- container -->
+
+<div class="footer">
+  Type4Me Code Review — 2026.04.12<br>
+  3x Claude (核心路径 / ASR Provider / 服务层) + 1x Codex CLI (GPT-5.4) 交叉验证<br>
+  覆盖 ~29,000 行 Swift + Python 服务端 | 排除 CloudSubscription 目录<br>
+  <strong style="color:var(--fixed)">27/36 issues fixed</strong> | 3 skipped (M2 builtin snippets 暂不用, M13 开发者问题, M14 极端边界) | 6 unfixed LOW (不触发/有意设计)
+</div>
+
+</body>
+</html>

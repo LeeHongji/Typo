@@ -1,0 +1,1002 @@
+[
+  {
+    "index": 0,
+    "raw_text": "那对应每个模型会切换实际的节点吗？",
+    "char_count": 17,
+    "prompt": "polish",
+    "qwen4b_output": "每个模型是否会在运行时切换实际的节点？",
+    "qwen4b_time": 0.376,
+    "qwen9b_output": "对于每个模型，是否实际切换对应的节点？",
+    "qwen9b_time": 0.771
+  },
+  {
+    "index": 0,
+    "raw_text": "那对应每个模型会切换实际的节点吗？",
+    "char_count": 17,
+    "prompt": "translate",
+    "qwen4b_output": "Will each model switch to the actual nodes accordingly?",
+    "qwen4b_time": 0.354,
+    "qwen9b_output": "Will the actual nodes switch for each model?",
+    "qwen9b_time": 0.607
+  },
+  {
+    "index": 1,
+    "raw_text": "这个开关是做在哪里啊？",
+    "char_count": 11,
+    "prompt": "polish",
+    "qwen4b_output": "这个开关位于何处？",
+    "qwen4b_time": 0.294,
+    "qwen9b_output": "请明确该开关的具体安装位置。",
+    "qwen9b_time": 0.543
+  },
+  {
+    "index": 1,
+    "raw_text": "这个开关是做在哪里啊？",
+    "char_count": 11,
+    "prompt": "translate",
+    "qwen4b_output": "Where is this switch located?",
+    "qwen4b_time": 0.313,
+    "qwen9b_output": "Where is this switch installed?",
+    "qwen9b_time": 0.506
+  },
+  {
+    "index": 2,
+    "raw_text": "计划在哪呀？",
+    "char_count": 6,
+    "prompt": "polish",
+    "qwen4b_output": "计划在哪里。",
+    "qwen4b_time": 0.273,
+    "qwen9b_output": "计划在哪里实施？",
+    "qwen9b_time": 0.464
+  },
+  {
+    "index": 2,
+    "raw_text": "计划在哪呀？",
+    "char_count": 6,
+    "prompt": "translate",
+    "qwen4b_output": "Where are we going?",
+    "qwen4b_time": 0.3,
+    "qwen9b_output": "Where are the plans?",
+    "qwen9b_time": 0.485
+  },
+  {
+    "index": 3,
+    "raw_text": "现在下好了吗？",
+    "char_count": 7,
+    "prompt": "polish",
+    "qwen4b_output": "现在是否已经下好？",
+    "qwen4b_time": 0.303,
+    "qwen9b_output": "当前是否已下载完成？",
+    "qwen9b_time": 0.503
+  },
+  {
+    "index": 3,
+    "raw_text": "现在下好了吗？",
+    "char_count": 7,
+    "prompt": "translate",
+    "qwen4b_output": "Have you finished it?",
+    "qwen4b_time": 0.3,
+    "qwen9b_output": "Is it downloaded now?",
+    "qwen9b_time": 0.485
+  },
+  {
+    "index": 4,
+    "raw_text": "打开ETSY的网页，说这个IP现在不能登录。",
+    "char_count": 22,
+    "prompt": "polish",
+    "qwen4b_output": "访问ETSY网站时，发现当前无法登录该IP地址。",
+    "qwen4b_time": 0.396,
+    "qwen9b_output": "在 ETSY 网页端登录时，提示当前 IP 无法登录。",
+    "qwen9b_time": 0.722
+  },
+  {
+    "index": 4,
+    "raw_text": "打开ETSY的网页，说这个IP现在不能登录。",
+    "char_count": 22,
+    "prompt": "translate",
+    "qwen4b_output": "Open the ETSY website, and say that this IP cannot log in now.",
+    "qwen4b_time": 0.416,
+    "qwen9b_output": "I'm trying to access Etsy's website, but it says this IP address is currently unable to log in.",
+    "qwen9b_time": 0.866
+  },
+  {
+    "index": 5,
+    "raw_text": "你看一下前面的那一个session，有涉及到下载，有一个下载方式，很快就是下现在的那个大模型的那个方式。",
+    "char_count": 52,
+    "prompt": "polish",
+    "qwen4b_output": "请查看前面的session，其中涉及下载内容，有一个下载方式，即当前大模型的下载方法。",
+    "qwen4b_time": 0.519,
+    "qwen9b_output": "请参考前面的会话，其中涉及一种大模型下载方式，其特点为下载速度极快。",
+    "qwen9b_time": 0.824
+  },
+  {
+    "index": 5,
+    "raw_text": "你看一下前面的那一个session，有涉及到下载，有一个下载方式，很快就是下现在的那个大模型的那个方式。",
+    "char_count": 52,
+    "prompt": "translate",
+    "qwen4b_output": "Check the session ahead, there's a download method mentioned, specifically the way to download the large model now.",
+    "qwen4b_time": 0.51,
+    "qwen9b_output": "Check out the previous session, which covered a download method—the same approach used for downloading large models right now.",
+    "qwen9b_time": 0.866
+  },
+  {
+    "index": 6,
+    "raw_text": "美国租公寓需要像中国这样押二付一给押金吗？",
+    "char_count": 21,
+    "prompt": "polish",
+    "qwen4b_output": "美国租公寓是否需要像中国一样支付押金？",
+    "qwen4b_time": 0.364,
+    "qwen9b_output": "在美国租公寓，是否需要像中国那样实行“押二付一”的押金制度？",
+    "qwen9b_time": 0.763
+  },
+  {
+    "index": 6,
+    "raw_text": "美国租公寓需要像中国这样押二付一给押金吗？",
+    "char_count": 21,
+    "prompt": "translate",
+    "qwen4b_output": "Does renting an apartment in the United States require paying a deposit equivalent to two months' rent, like in China?",
+    "qwen4b_time": 0.491,
+    "qwen9b_output": "Do I need to pay two months' rent upfront as the deposit when renting an apartment in the U.S., like in China?",
+    "qwen9b_time": 0.942
+  },
+  {
+    "index": 7,
+    "raw_text": "我们那个type for me的项目在设置端里面加一个支持关掉流式识别的功能，关掉之后，悬浮窗就只展示识别中固定的然后其他的流程不变，但是对应的会需要看一下现在的各个模型，如何把流式识别的引擎切换成录音识别的引擎。",
+    "char_count": 107,
+    "prompt": "polish",
+    "qwen4b_output": "我们那个“type for me”的项目在设置端中需要添加一个关闭流式识别功能的选项。关闭后，悬浮窗仅显示“识别中”的固定提示，其他流程保持不变。但需要检查当前各个模型，将流式识别引擎切换为录音识别引擎。",
+    "qwen4b_time": 0.929,
+    "qwen9b_output": "在 Type For Me 项目的设置端增加“关闭流式识别”的功能选项。关闭后，悬浮窗仅展示固定的识别状态，其余流程保持不变。同时，需评估各现有模型，明确如何将流式识别引擎切换为录音识别引擎。",
+    "qwen9b_time": 1.521
+  },
+  {
+    "index": 7,
+    "raw_text": "我们那个type for me的项目在设置端里面加一个支持关掉流式识别的功能，关掉之后，悬浮窗就只展示识别中固定的然后其他的流程不变，但是对应的会需要看一下现在的各个模型，如何把流式识别的引擎切换成录音识别的引擎。",
+    "char_count": 107,
+    "prompt": "translate",
+    "qwen4b_output": "We need to add a feature in the settings to disable the streaming recognition for the \"type for me\" project. Once disabled, the floating window will only show the fixed \"recognizing\" message, while the rest of the process remains unchanged. However, we need to check the current models and switch the streaming recognition engine to the recording recognition engine.",
+    "qwen4b_time": 1.036,
+    "qwen9b_output": "Please add an option in the settings to disable streaming recognition for the \"Type for Me\" project. Once disabled, the floating window should only display the fixed \"recording in progress\" status, while the rest of the workflow remains unchanged. However, we'll need to review the current models to figure out how to switch from the streaming recognition engine to the recording recognition engine.",
+    "qwen9b_time": 1.959
+  },
+  {
+    "index": 8,
+    "raw_text": "现在下载速度怎么样？",
+    "char_count": 10,
+    "prompt": "polish",
+    "qwen4b_output": "当前下载速度如何？",
+    "qwen4b_time": 0.295,
+    "qwen9b_output": "下载速度如何？",
+    "qwen9b_time": 0.48
+  },
+  {
+    "index": 8,
+    "raw_text": "现在下载速度怎么样？",
+    "char_count": 10,
+    "prompt": "translate",
+    "qwen4b_output": "What's the current download speed?",
+    "qwen4b_time": 0.336,
+    "qwen9b_output": "How's the download speed now?",
+    "qwen9b_time": 0.534
+  },
+  {
+    "index": 9,
+    "raw_text": "你是用什么方式下载的？之前有一个快的方式，你用了吗？",
+    "char_count": 26,
+    "prompt": "polish",
+    "qwen4b_output": "你用什么方式下载的？之前有一个更快的方法，你用过吗？",
+    "qwen4b_time": 0.442,
+    "qwen9b_output": "你是通过何种方式下载的？此前曾有一种更快的途径，你是否尝试过？",
+    "qwen9b_time": 0.727
+  },
+  {
+    "index": 9,
+    "raw_text": "你是用什么方式下载的？之前有一个快的方式，你用了吗？",
+    "char_count": 26,
+    "prompt": "translate",
+    "qwen4b_output": "How did you download it? There was a faster way before—have you used it?",
+    "qwen4b_time": 0.485,
+    "qwen9b_output": "Which method did you use to download it? There was a faster one before—did you try that?",
+    "qwen9b_time": 0.852
+  },
+  {
+    "index": 10,
+    "raw_text": "Anthropropic.",
+    "char_count": 13,
+    "prompt": "polish",
+    "qwen4b_output": "Anthropomorphic.",
+    "qwen4b_time": 0.284,
+    "qwen9b_output": "Anthropogenic.",
+    "qwen9b_time": 0.468
+  },
+  {
+    "index": 10,
+    "raw_text": "Anthropropic.",
+    "char_count": 13,
+    "prompt": "translate",
+    "qwen4b_output": "Anthropogenic.",
+    "qwen4b_time": 0.3,
+    "qwen9b_output": "Anthropomorphic.",
+    "qwen9b_time": 0.486
+  },
+  {
+    "index": 11,
+    "raw_text": "有什么更好的开源模型能搞这个事儿吗？",
+    "char_count": 18,
+    "prompt": "polish",
+    "qwen4b_output": "有没有其他更优秀的开源模型可以用于这个任务？",
+    "qwen4b_time": 0.367,
+    "qwen9b_output": "是否有更优的开源模型可用于此任务？",
+    "qwen9b_time": 0.588
+  },
+  {
+    "index": 11,
+    "raw_text": "有什么更好的开源模型能搞这个事儿吗？",
+    "char_count": 18,
+    "prompt": "translate",
+    "qwen4b_output": "Are there any better open-source models for this task?",
+    "qwen4b_time": 0.37,
+    "qwen9b_output": "Are there any better open-source models for this?",
+    "qwen9b_time": 0.64
+  },
+  {
+    "index": 12,
+    "raw_text": "那这样我们是不是可以换那个3.59B的模型去试一下？",
+    "char_count": 26,
+    "prompt": "polish",
+    "qwen4b_output": "我们是否可以尝试使用3.59B的模型？",
+    "qwen4b_time": 0.392,
+    "qwen9b_output": "建议尝试换用 3.59B 模型进行测试。",
+    "qwen9b_time": 0.715
+  },
+  {
+    "index": 12,
+    "raw_text": "那这样我们是不是可以换那个3.59B的模型去试一下？",
+    "char_count": 26,
+    "prompt": "translate",
+    "qwen4b_output": "So, can we try the 3.59B model instead?",
+    "qwen4b_time": 0.439,
+    "qwen9b_output": "Shall we try swapping to the 3.59B model then?",
+    "qwen9b_time": 0.751
+  },
+  {
+    "index": 13,
+    "raw_text": "是肯定要的。",
+    "char_count": 6,
+    "prompt": "polish",
+    "qwen4b_output": "是的，需要。",
+    "qwen4b_time": 0.295,
+    "qwen9b_output": "是的，必须采纳。",
+    "qwen9b_time": 0.484
+  },
+  {
+    "index": 13,
+    "raw_text": "是肯定要的。",
+    "char_count": 6,
+    "prompt": "translate",
+    "qwen4b_output": "Yes, it's definitely needed.",
+    "qwen4b_time": 0.324,
+    "qwen9b_output": "Absolutely, that's a definite yes.",
+    "qwen9b_time": 0.547
+  },
+  {
+    "index": 14,
+    "raw_text": "豆包啥情况下会花20多秒啊，这个有点夸张啊。",
+    "char_count": 22,
+    "prompt": "polish",
+    "qwen4b_output": "豆包在什么情况下会花费20多秒呢？这个时间有点夸张。",
+    "qwen4b_time": 0.444,
+    "qwen9b_output": "豆包出现耗时 20 多秒的情况较为罕见，这一现象确实值得探讨。",
+    "qwen9b_time": 0.826
+  },
+  {
+    "index": 14,
+    "raw_text": "豆包啥情况下会花20多秒啊，这个有点夸张啊。",
+    "char_count": 22,
+    "prompt": "translate",
+    "qwen4b_output": "Why would DaoBao take more than 20 seconds? That seems a bit exaggerated.",
+    "qwen4b_time": 0.478,
+    "qwen9b_output": "Why would Doubao take over 20 seconds? That's quite exaggerated.",
+    "qwen9b_time": 0.745
+  },
+  {
+    "index": 15,
+    "raw_text": "这个质量太差了。",
+    "char_count": 8,
+    "prompt": "polish",
+    "qwen4b_output": "质量过于差。",
+    "qwen4b_time": 0.283,
+    "qwen9b_output": "该产品质量极差。",
+    "qwen9b_time": 0.485
+  },
+  {
+    "index": 15,
+    "raw_text": "这个质量太差了。",
+    "char_count": 8,
+    "prompt": "translate",
+    "qwen4b_output": "The quality is really poor.",
+    "qwen4b_time": 0.314,
+    "qwen9b_output": "The quality is terrible.",
+    "qwen9b_time": 0.487
+  },
+  {
+    "index": 16,
+    "raw_text": "不然你热词不改的话，他也兜不住吧。",
+    "char_count": 17,
+    "prompt": "polish",
+    "qwen4b_output": "如果不修改热词，他恐怕难以应对。",
+    "qwen4b_time": 0.354,
+    "qwen9b_output": "若热词不予调整，将无法有效支撑整体内容。",
+    "qwen9b_time": 0.604
+  },
+  {
+    "index": 16,
+    "raw_text": "不然你热词不改的话，他也兜不住吧。",
+    "char_count": 17,
+    "prompt": "translate",
+    "qwen4b_output": "Otherwise, if you don't change the keywords, he won't be able to keep up.",
+    "qwen4b_time": 0.45,
+    "qwen9b_output": "Unless you update the hotwords, it won't be able to handle it either.",
+    "qwen9b_time": 0.767
+  },
+  {
+    "index": 17,
+    "raw_text": "我还以为你们是找公具方收的中介费呢。",
+    "char_count": 18,
+    "prompt": "polish",
+    "qwen4b_output": "我误以为你们是通过公具方收取中介费用。",
+    "qwen4b_time": 0.408,
+    "qwen9b_output": "此前我误以为你们是向工具方收取的中介费用。",
+    "qwen9b_time": 0.649
+  },
+  {
+    "index": 17,
+    "raw_text": "我还以为你们是找公具方收的中介费呢。",
+    "char_count": 18,
+    "prompt": "translate",
+    "qwen4b_output": "I thought you were paying the intermediary fee to the public agency.",
+    "qwen4b_time": 0.39,
+    "qwen9b_output": "I thought you were charging us an intermediary fee through the public platform.",
+    "qwen9b_time": 0.712
+  },
+  {
+    "index": 18,
+    "raw_text": "八成是AI写的。",
+    "char_count": 8,
+    "prompt": "polish",
+    "qwen4b_output": "八成是AI撰写的。",
+    "qwen4b_time": 0.319,
+    "qwen9b_output": "八成是由人工智能生成的。",
+    "qwen9b_time": 0.487
+  },
+  {
+    "index": 18,
+    "raw_text": "八成是AI写的。",
+    "char_count": 8,
+    "prompt": "translate",
+    "qwen4b_output": "Eighty percent is AI-written.",
+    "qwen4b_time": 0.325,
+    "qwen9b_output": "It's probably AI-generated.",
+    "qwen9b_time": 0.509
+  },
+  {
+    "index": 19,
+    "raw_text": "八成是AI鞋。",
+    "char_count": 7,
+    "prompt": "polish",
+    "qwen4b_output": "八成是AI鞋。",
+    "qwen4b_time": 0.307,
+    "qwen9b_output": "八成是 AI 鞋。",
+    "qwen9b_time": 0.507
+  },
+  {
+    "index": 19,
+    "raw_text": "八成是AI鞋。",
+    "char_count": 7,
+    "prompt": "translate",
+    "qwen4b_output": "Eighty percent is AI shoes.",
+    "qwen4b_time": 0.326,
+    "qwen9b_output": "It's probably AI-generated shoes.",
+    "qwen9b_time": 0.544
+  },
+  {
+    "index": 20,
+    "raw_text": "你从历史记录里面直接扒一些记录8个50条吧，然后分别跑一下我们现在配的豆包的模型和这个本地模型，主要套用现在的语音润色和英文翻译这两个prot，跟我汇总一下结果，需要包括他们的输出质量和速度。",
+    "char_count": 96,
+    "prompt": "polish",
+    "qwen4b_output": "从历史记录中直接提取8个50条记录，分别运行当前使用的豆包模型和本地模型，主要测试语音润色和英文翻译两个功能。请将测试结果汇总，包括两个模型的输出质量和处理速度。",
+    "qwen4b_time": 0.847,
+    "qwen9b_output": "请从历史记录中提取 8 条记录，每条各取 50 条数据，分别使用当前配置的豆包模型和本地模型进行处理。主要套用“语音润色”和“英文翻译”两个协议，并汇总对比结果。对比内容需包含输出质量与处理速度。",
+    "qwen9b_time": 1.708
+  },
+  {
+    "index": 20,
+    "raw_text": "你从历史记录里面直接扒一些记录8个50条吧，然后分别跑一下我们现在配的豆包的模型和这个本地模型，主要套用现在的语音润色和英文翻译这两个prot，跟我汇总一下结果，需要包括他们的输出质量和速度。",
+    "char_count": 96,
+    "prompt": "translate",
+    "qwen4b_output": "Pull out 50 records from the history log, then run the current bean model and the local model separately. Focus on the current voice polishing and English translation protocols. Summarize the results, including output quality and speed.",
+    "qwen4b_time": 0.822,
+    "qwen9b_output": "Pull some records from the history (around 8 batches of 50 entries each) and run them through both our current \"Doubao\" model and the local model. Apply our voice polishing and English translation protocols, then summarize the results, focusing on output quality and speed.",
+    "qwen9b_time": 1.645
+  },
+  {
+    "index": 21,
+    "raw_text": "你看一下sense voice的热词和映射生效了没有已经用用的是流式识别还是完整的录音识别？",
+    "char_count": 46,
+    "prompt": "polish",
+    "qwen4b_output": "请查看sense voice的热词和映射是否已生效，当前使用的是流式识别还是完整的录音识别？",
+    "qwen4b_time": 0.542,
+    "qwen9b_output": "请检查 SenseVoice 的热词与映射功能是否已生效，并确认当前采用的是流式识别还是完整录音识别模式。",
+    "qwen9b_time": 0.965
+  },
+  {
+    "index": 21,
+    "raw_text": "你看一下sense voice的热词和映射生效了没有已经用用的是流式识别还是完整的录音识别？",
+    "char_count": 46,
+    "prompt": "translate",
+    "qwen4b_output": "Have you checked whether the hot words and mappings for Sense Voice are working, and is it using streaming recognition or full recording recognition?",
+    "qwen4b_time": 0.55,
+    "qwen9b_output": "Could you check if the trending keywords and their mappings are working in SenseVoice? Also, are you using streaming recognition or full-recognition mode?",
+    "qwen9b_time": 1.006
+  },
+  {
+    "index": 22,
+    "raw_text": "不是，你没有对比那个本地模型吗？",
+    "char_count": 16,
+    "prompt": "polish",
+    "qwen4b_output": "你是否已经对比过本地模型？",
+    "qwen4b_time": 0.327,
+    "qwen9b_output": "是否已对比过本地模型？",
+    "qwen9b_time": 0.526
+  },
+  {
+    "index": 22,
+    "raw_text": "不是，你没有对比那个本地模型吗？",
+    "char_count": 16,
+    "prompt": "translate",
+    "qwen4b_output": "No, didn't you compare that local model?",
+    "qwen4b_time": 0.355,
+    "qwen9b_output": "No, didn't you compare it with that local model?",
+    "qwen9b_time": 0.668
+  },
+  {
+    "index": 23,
+    "raw_text": "从现在爬到的数据里面",
+    "char_count": 10,
+    "prompt": "polish",
+    "qwen4b_output": "从现在开始处理的数据中。",
+    "qwen4b_time": 0.315,
+    "qwen9b_output": "基于当前获取的数据。",
+    "qwen9b_time": 0.493
+  },
+  {
+    "index": 23,
+    "raw_text": "从现在爬到的数据里面",
+    "char_count": 10,
+    "prompt": "translate",
+    "qwen4b_output": "From the data crawled so far.",
+    "qwen4b_time": 0.33,
+    "qwen9b_output": "From the data crawled so far.",
+    "qwen9b_time": 0.535
+  },
+  {
+    "index": 24,
+    "raw_text": "放进去了，你去看一下。",
+    "char_count": 11,
+    "prompt": "polish",
+    "qwen4b_output": "你把它放进去，去查看一下。",
+    "qwen4b_time": 0.344,
+    "qwen9b_output": "已放入，请查看。",
+    "qwen9b_time": 0.517
+  },
+  {
+    "index": 24,
+    "raw_text": "放进去了，你去看一下。",
+    "char_count": 11,
+    "prompt": "translate",
+    "qwen4b_output": "Put it in, and you check.",
+    "qwen4b_time": 0.341,
+    "qwen9b_output": "I've put it in. Please take a look.",
+    "qwen9b_time": 0.646
+  },
+  {
+    "index": 25,
+    "raw_text": "打开一下我们那个公寓租金监控的网页。",
+    "char_count": 18,
+    "prompt": "polish",
+    "qwen4b_output": "打开公寓租金监控的网页。",
+    "qwen4b_time": 0.327,
+    "qwen9b_output": "打开公寓租金监控网页。",
+    "qwen9b_time": 0.513
+  },
+  {
+    "index": 25,
+    "raw_text": "打开一下我们那个公寓租金监控的网页。",
+    "char_count": 18,
+    "prompt": "translate",
+    "qwen4b_output": "Open the webpage for our apartment rent monitoring.",
+    "qwen4b_time": 0.353,
+    "qwen9b_output": "Open our apartment rent monitoring webpage.",
+    "qwen9b_time": 0.582
+  },
+  {
+    "index": 26,
+    "raw_text": "看一下 Typeform 文件夹里面的这一个文档，我们来做这个需求。",
+    "char_count": 34,
+    "prompt": "polish",
+    "qwen4b_output": "请查看 Typeform 文件夹中的该文档，我们开始处理这个需求。",
+    "qwen4b_time": 0.431,
+    "qwen9b_output": "请查看 Typeform 文件夹中的文档，并据此开展需求工作。",
+    "qwen9b_time": 0.699
+  },
+  {
+    "index": 26,
+    "raw_text": "看一下 Typeform 文件夹里面的这一个文档，我们来做这个需求。",
+    "char_count": 34,
+    "prompt": "translate",
+    "qwen4b_output": "Check the document in the Typeform folder and let's proceed with this request.",
+    "qwen4b_time": 0.433,
+    "qwen9b_output": "Let's review the document in the Typeform folder to tackle this requirement.",
+    "qwen9b_time": 0.743
+  },
+  {
+    "index": 27,
+    "raw_text": "这个 session 的上下文已经太长了，你写个计划，然后我们新开一个 session 来做吧。",
+    "char_count": 48,
+    "prompt": "polish",
+    "qwen4b_output": "本次 session 的上下文已过于冗长，建议先制定一个计划，随后我们开启新的 session 进行后续工作。",
+    "qwen4b_time": 0.581,
+    "qwen9b_output": "本会话上下文已过长，请制定计划后，我们将开启新会话继续执行。",
+    "qwen9b_time": 0.809
+  },
+  {
+    "index": 27,
+    "raw_text": "这个 session 的上下文已经太长了，你写个计划，然后我们新开一个 session 来做吧。",
+    "char_count": 48,
+    "prompt": "translate",
+    "qwen4b_output": "This session's context has been too long. Write a plan, and then we can start a new session.",
+    "qwen4b_time": 0.528,
+    "qwen9b_output": "The context for this session has gotten too long. Please draft a plan, and let's start a new session to execute it.",
+    "qwen9b_time": 0.989
+  },
+  {
+    "index": 28,
+    "raw_text": "第一批你找一些样例，我们先测10个句子吧。告诉我怎么录给你比较好。",
+    "char_count": 33,
+    "prompt": "polish",
+    "qwen4b_output": "首先，你先准备一些样例。我们先测试10个句子。请告诉我如何录制给你比较合适。",
+    "qwen4b_time": 0.544,
+    "qwen9b_output": "首先，请准备一些样例，我们先测试 10 个句子。请告知你认为哪种录音方式更适合发送给我。",
+    "qwen9b_time": 0.975
+  },
+  {
+    "index": 28,
+    "raw_text": "第一批你找一些样例，我们先测10个句子吧。告诉我怎么录给你比较好。",
+    "char_count": 33,
+    "prompt": "translate",
+    "qwen4b_output": "First, find some examples. Let's test 10 sentences. Tell me how best to record for you.",
+    "qwen4b_time": 0.546,
+    "qwen9b_output": "Let's grab some sample sentences for the first batch—we'll start with 10. Could you let me know the best way to record them for you?",
+    "qwen9b_time": 1.122
+  },
+  {
+    "index": 29,
+    "raw_text": "然后测试模式上，我们搭建一个流程吧。我把音频文件录好给你，你自己去跑脚本测试，这样高效一些。我用苹果的系统备忘录 后来录可以吗？",
+    "char_count": 64,
+    "prompt": "polish",
+    "qwen4b_output": "在测试模式中，我们搭建一个流程。我将音频文件录好后发给你，你自行运行脚本进行测试，这样会更高效。我用苹果系统的备忘录录可以吗？",
+    "qwen4b_time": 0.788,
+    "qwen9b_output": "建议采用以下流程进行测试：由您录制音频文件并发送给我，我随后运行脚本进行测试。此方式效率更高。请问使用苹果系统备忘录录音是否可行？",
+    "qwen9b_time": 1.185
+  },
+  {
+    "index": 29,
+    "raw_text": "然后测试模式上，我们搭建一个流程吧。我把音频文件录好给你，你自己去跑脚本测试，这样高效一些。我用苹果的系统备忘录 后来录可以吗？",
+    "char_count": 64,
+    "prompt": "translate",
+    "qwen4b_output": "Then, in test mode, let's set up a process. I'll record the audio file for you, and you can run the script yourself, which will be more efficient. Can I record it using Apple's Notes app?",
+    "qwen4b_time": 0.812,
+    "qwen9b_output": "Let's set up a test workflow in test mode. I'll record the audio file and send it to you, and you can run the script to test it directly—that way, it'll be more efficient. Is it okay if I use Apple's Notes app for recording?",
+    "qwen9b_time": 1.553
+  },
+  {
+    "index": 30,
+    "raw_text": "有额外的费用吗？",
+    "char_count": 8,
+    "prompt": "polish",
+    "qwen4b_output": "是否有额外费用？",
+    "qwen4b_time": 0.287,
+    "qwen9b_output": "是否会产生额外费用？",
+    "qwen9b_time": 0.486
+  },
+  {
+    "index": 30,
+    "raw_text": "有额外的费用吗？",
+    "char_count": 8,
+    "prompt": "translate",
+    "qwen4b_output": "Are there any additional charges?",
+    "qwen4b_time": 0.312,
+    "qwen9b_output": "Are there any additional charges?",
+    "qwen9b_time": 0.505
+  },
+  {
+    "index": 31,
+    "raw_text": "有额外的费用吗？",
+    "char_count": 8,
+    "prompt": "polish",
+    "qwen4b_output": "是否有额外费用？",
+    "qwen4b_time": 0.285,
+    "qwen9b_output": "是否有额外费用？",
+    "qwen9b_time": 0.463
+  },
+  {
+    "index": 31,
+    "raw_text": "有额外的费用吗？",
+    "char_count": 8,
+    "prompt": "translate",
+    "qwen4b_output": "Are there any additional fees?",
+    "qwen4b_time": 0.312,
+    "qwen9b_output": "Are there any additional fees?",
+    "qwen9b_time": 0.505
+  },
+  {
+    "index": 32,
+    "raw_text": "有额外的费用吗？",
+    "char_count": 8,
+    "prompt": "polish",
+    "qwen4b_output": "是否有额外费用？",
+    "qwen4b_time": 0.284,
+    "qwen9b_output": "是否存在额外费用？",
+    "qwen9b_time": 0.463
+  },
+  {
+    "index": 32,
+    "raw_text": "有额外的费用吗？",
+    "char_count": 8,
+    "prompt": "translate",
+    "qwen4b_output": "Are there any additional charges?",
+    "qwen4b_time": 0.311,
+    "qwen9b_output": "Are there any additional fees?",
+    "qwen9b_time": 0.506
+  },
+  {
+    "index": 33,
+    "raw_text": "然后你主要结合现在火灾引擎的热词特性，还有我们本地sense voice的这个模型的特性，考虑一下这些热词应该怎么配置和如何生效，然后给我写一些中英混杂的例句，我去测试一下。",
+    "char_count": 87,
+    "prompt": "polish",
+    "qwen4b_output": "请你结合当前火灾引擎的热词特性，以及我们本地Sense Voice模型的特性，考虑这些热词的配置方式和生效方法，并提供一些中英混杂的例句，供我进行测试。",
+    "qwen4b_time": 0.749,
+    "qwen9b_output": "请结合当前火灾引擎的热词特性以及本地 SenseVoice 模型的特点，探讨热词的配置方案与生效机制，并提供中英混杂的测试例句。",
+    "qwen9b_time": 1.043
+  },
+  {
+    "index": 33,
+    "raw_text": "然后你主要结合现在火灾引擎的热词特性，还有我们本地sense voice的这个模型的特性，考虑一下这些热词应该怎么配置和如何生效，然后给我写一些中英混杂的例句，我去测试一下。",
+    "char_count": 87,
+    "prompt": "translate",
+    "qwen4b_output": "Then you should mainly combine the hot words characteristics of the current fire engine model and the characteristics of our local Sense Voice model, think about how to configure and make these hot words effective, and then provide some example sentences that mix Chinese and English for me to test.",
+    "qwen4b_time": 0.856,
+    "qwen9b_output": "Then, please combine the characteristics of current fire engine hotwords with those of our local SenseVoice model to consider how to configure and activate these hotwords. Additionally, provide me with some Sino-English code-mixed example sentences for testing.",
+    "qwen9b_time": 1.439
+  },
+  {
+    "index": 34,
+    "raw_text": "中文热词基本都不需要。然后英文热词你需要考虑的不是我历史上其他的项目是什么样的，而是这个东西是要开放出去给大家用的。所以我私人的那些项目不需要，比如说电商和金融。但是嗯这个输入法现在比较关注的是关注AI领域的那些人。所以他们日常会用到的那些，特别是英文词汇是需要重点关注的。你可以再梳理一版。",
+    "char_count": 146,
+    "prompt": "polish",
+    "qwen4b_output": "中文热词基本不需要考虑。英文热词的考虑方向，不是我过去其他项目的状况，而是这个产品是要对外开放使用的。因此，我个人的项目，如电商和金融，不需要考虑。当前输入法更关注的是AI领域的用户，他们日常使用中会接触到的词汇，尤其是英文词汇，需要重点梳理。你可以再梳理一遍。",
+    "qwen4b_time": 1.087,
+    "qwen9b_output": "中文热词基本无需收录。英文热词的筛选标准不应参考过往项目，而应聚焦于产品的开放性与大众可用性。因此，电商、金融等个人项目中的词汇无需纳入，但输入法需重点覆盖 AI 领域从业者日常使用的英文词汇。请据此重新梳理一版。",
+    "qwen9b_time": 1.655
+  },
+  {
+    "index": 34,
+    "raw_text": "中文热词基本都不需要。然后英文热词你需要考虑的不是我历史上其他的项目是什么样的，而是这个东西是要开放出去给大家用的。所以我私人的那些项目不需要，比如说电商和金融。但是嗯这个输入法现在比较关注的是关注AI领域的那些人。所以他们日常会用到的那些，特别是英文词汇是需要重点关注的。你可以再梳理一版。",
+    "char_count": 146,
+    "prompt": "translate",
+    "qwen4b_output": "Basic Chinese hot words are not needed. When considering English hot words, you should focus not on what other projects in my history look like, but on what this thing needs to be open to everyone. So my personal projects don't matter, like e-commerce and finance. However, right now, the input method is more focused on people in the AI field. They use certain words daily, especially English vocabulary, which needs special attention. You can revise it again.",
+    "qwen4b_time": 1.298,
+    "qwen9b_output": "Basically, Chinese trending terms aren't necessary. For English trending terms, don't base your selection on my past projects like e-commerce and finance. Instead, focus on what needs to be open to the public. Since this input method is specifically targeting people in the AI field, prioritize the English vocabulary they use daily. Please go ahead and refine the list accordingly.",
+    "qwen9b_time": 1.895
+  },
+  {
+    "index": 35,
+    "raw_text": "难道没有更快的方式了吗？这个还是太慢了。",
+    "char_count": 20,
+    "prompt": "polish",
+    "qwen4b_output": "难道没有更快的方法吗？这种方式仍然显得不够高效。",
+    "qwen4b_time": 0.371,
+    "qwen9b_output": "难道没有更快的方式吗？当前这种方式效率过低。",
+    "qwen9b_time": 0.602
+  },
+  {
+    "index": 35,
+    "raw_text": "难道没有更快的方式了吗？这个还是太慢了。",
+    "char_count": 20,
+    "prompt": "translate",
+    "qwen4b_output": "Is there a faster way? This is still too slow.",
+    "qwen4b_time": 0.375,
+    "qwen9b_output": "Is there no faster way? This is still too slow.",
+    "qwen9b_time": 0.695
+  },
+  {
+    "index": 36,
+    "raw_text": "你这个文件。",
+    "char_count": 6,
+    "prompt": "polish",
+    "qwen4b_output": "你这个文件。",
+    "qwen4b_time": 0.281,
+    "qwen9b_output": "请查看该文件。",
+    "qwen9b_time": 0.481
+  },
+  {
+    "index": 36,
+    "raw_text": "你这个文件。",
+    "char_count": 6,
+    "prompt": "translate",
+    "qwen4b_output": "This file.",
+    "qwen4b_time": 0.281,
+    "qwen9b_output": "This file.",
+    "qwen9b_time": 0.446
+  },
+  {
+    "index": 37,
+    "raw_text": "我有clash party的代理啊，你可以用啊。",
+    "char_count": 24,
+    "prompt": "polish",
+    "qwen4b_output": "我有Clash Party的代理，你可以使用。",
+    "qwen4b_time": 0.367,
+    "qwen9b_output": "我拥有 Clash Party 的代理账号，可供使用。",
+    "qwen9b_time": 0.627
+  },
+  {
+    "index": 37,
+    "raw_text": "我有clash party的代理啊，你可以用啊。",
+    "char_count": 24,
+    "prompt": "translate",
+    "qwen4b_output": "I have a Clash Party proxy, you can use it.",
+    "qwen4b_time": 0.377,
+    "qwen9b_output": "I have a Clash Party proxy available—you can use it.",
+    "qwen9b_time": 0.665
+  },
+  {
+    "index": 38,
+    "raw_text": "贷款的时候我有clash party的代理的拖垮的。",
+    "char_count": 26,
+    "prompt": "polish",
+    "qwen4b_output": "贷款时，我使用了Clash Party的代理，导致系统拖垮。",
+    "qwen4b_time": 0.431,
+    "qwen9b_output": "贷款期间，我使用过 Clash Party 的代理，导致资金耗尽。",
+    "qwen9b_time": 0.706
+  },
+  {
+    "index": 38,
+    "raw_text": "贷款的时候我有clash party的代理的拖垮的。",
+    "char_count": 26,
+    "prompt": "translate",
+    "qwen4b_output": "When I applied for the loan, I had a bad experience with the Clash Party agent.",
+    "qwen4b_time": 0.504,
+    "qwen9b_output": "I had a Clash Party proxy that was used to process my loan.",
+    "qwen9b_time": 0.722
+  },
+  {
+    "index": 39,
+    "raw_text": "我想要给type for me的项目建一个完整的热词和映射词的词表，用来覆盖日常使用里面涉及到的一些名词。现在中文语境下到还好，主要是一些同音词有时候不是很准，这个可能主要用热词来做会比较好。但是英文场景可能是因为模型本身更缺少上下文，所以词汇的识别不是很准。比如说外 coding和外这两个词就是重灾区这个可能要通过更强的就是逻辑映射来关联。并且逻辑映射要支持多对一的关系，就是把一个词可能会被识别出来的多个错误的可能性都统一映射到我要的词，但我现在自己来整理这个词表太麻烦了。你帮我结合我日常使用的语境，综合想一想，可能会可以做哪一些词到词表里面，可以多想一些，我们再来同一review就好了。",
+    "char_count": 299,
+    "prompt": "polish",
+    "qwen4b_output": "我想要为“type for me”项目建立一个完整的热词和映射词词表，用于覆盖日常使用中涉及的一些名词。目前在中文语境下情况尚可，但存在一些同音词识别不够准确的问题，这可能更适合通过热词来解决。然而在英文语境下，由于模型本身缺乏上下文，词汇识别不够准确。例如“external coding”和“external”这样的词就是重灾区，这可能需要通过更强的逻辑映射来关联。逻辑映射应支持多对一的关系，即把一个词可能被识别出的多种错误形式统一映射到目标词。但目前我自行整理这个词表显得过于繁琐。请你结合我日常使用的语境，综合考虑，看看可以将哪些词纳入词表，尽量多想一些，我们再一起进行审核。",
+    "qwen4b_time": 2.318,
+    "qwen9b_output": "为\"Type for Me\"项目构建一套完整的热词与映射词表，旨在覆盖日常使用中的关键名词。在中文语境下，该方案效果良好，主要能纠正因同音字导致的识别偏差；而在英文场景中，由于模型上下文理解能力相对较弱，词汇识别准确率较低，例如\"coding\"与\"外\"等词即为高频误识点，需通过强化逻辑映射机制进行关联。逻辑映射需支持多对一关系，即将用户可能输入的多个错误变体统一映射至目标正确词汇。鉴于手动整理词表效率较低，请结合我的日常使用语境，综合构思并扩展候选词表，待初步方案形成后，我们再共同评审确认。",
+    "qwen9b_time": 3.617
+  },
+  {
+    "index": 39,
+    "raw_text": "我想要给type for me的项目建一个完整的热词和映射词的词表，用来覆盖日常使用里面涉及到的一些名词。现在中文语境下到还好，主要是一些同音词有时候不是很准，这个可能主要用热词来做会比较好。但是英文场景可能是因为模型本身更缺少上下文，所以词汇的识别不是很准。比如说外 coding和外这两个词就是重灾区这个可能要通过更强的就是逻辑映射来关联。并且逻辑映射要支持多对一的关系，就是把一个词可能会被识别出来的多个错误的可能性都统一映射到我要的词，但我现在自己来整理这个词表太麻烦了。你帮我结合我日常使用的语境，综合想一想，可能会可以做哪一些词到词表里面，可以多想一些，我们再来同一review就好了。",
+    "char_count": 299,
+    "prompt": "translate",
+    "qwen4b_output": "I want to create a complete word list with hot words and mapping words for the \"type for me\" project, to cover some nouns that are commonly used in daily conversation. In the Chinese context, it's still okay, but sometimes homophones aren't very accurate, so using hot words might be better in this case. However, in the English context, the model may lack context, leading to less accurate word recognition. For example, words like \"outer\" and \"out\" are problematic areas. This might require stronger logical mapping to associate them. And the logical mapping needs to support many-to-one relationships, meaning that multiple possible errors for a single word should be mapped to the intended word. But currently, it's too tedious for me to manually compile this word list. You can help me think about which words might be included in the word list based on my daily usage. Let's think of as many as possible, and we can review them together.",
+    "qwen4b_time": 2.576,
+    "qwen9b_output": "I need to build a comprehensive list of hotwords and mapping terms for the TypeForMe project to cover common nouns used in daily scenarios. While Chinese ASR is generally okay, homophones often cause inaccuracies, so leveraging hotwords is a good approach. However, in English, the model's lack of context makes recognition less accurate; for instance, \"coding\" and \"wài\" (外) are major pain points. This likely requires stronger logical mapping to link them. Importantly, this logic must support many-to-one relationships, where multiple potential misrecognitions are consolidated into the correct target term. Since manually curating this list is tedious, please leverage your understanding of my daily usage context to brainstorm a comprehensive initial list of candidate words. We can review and refine it together afterward.",
+    "qwen9b_time": 3.864
+  },
+  {
+    "index": 40,
+    "raw_text": "还有一个问题是我们现在本地识别的那个选项里面，括号还写的是performer，把那个改掉吧。",
+    "char_count": 46,
+    "prompt": "polish",
+    "qwen4b_output": "还有一个问题，目前本地识别的选项中，括号里写的是“performer”，需要将这个修改一下。",
+    "qwen4b_time": 0.525,
+    "qwen9b_output": "还有一个问题：请将本地识别选项中的括号内容\"performer\"进行修改。",
+    "qwen9b_time": 0.754
+  },
+  {
+    "index": 40,
+    "raw_text": "还有一个问题是我们现在本地识别的那个选项里面，括号还写的是performer，把那个改掉吧。",
+    "char_count": 46,
+    "prompt": "translate",
+    "qwen4b_output": "There's another issue: in the local recognition option, the parentheses still say \"performer\"—let's change that.",
+    "qwen4b_time": 0.538,
+    "qwen9b_output": "Also, in the local recognition option, the bracket still says \"performer\" — please update that.",
+    "qwen9b_time": 0.862
+  },
+  {
+    "index": 41,
+    "raw_text": "你评估的那个跟这个E思里面说的是同一回事吗？那你可以回复一下他。",
+    "char_count": 32,
+    "prompt": "polish",
+    "qwen4b_output": "你评估的内容与E思中提到的内容是否一致？如果一致，请予以回复。",
+    "qwen4b_time": 0.448,
+    "qwen9b_output": "请评估该事项是否与 E 思中的内容一致，如有差异，请予以回复。",
+    "qwen9b_time": 0.806
+  },
+  {
+    "index": 41,
+    "raw_text": "你评估的那个跟这个E思里面说的是同一回事吗？那你可以回复一下他。",
+    "char_count": 32,
+    "prompt": "translate",
+    "qwen4b_output": "Did the assessment you mentioned earlier refer to the same thing as the one in the E system? Then you can reply to him.",
+    "qwen4b_time": 0.569,
+    "qwen9b_output": "Is the assessment you made referring to the same thing mentioned in ESI? If so, please reply to him.",
+    "qwen9b_time": 0.912
+  },
+  {
+    "index": 42,
+    "raw_text": "发之前内容都先跟我过一下。",
+    "char_count": 13,
+    "prompt": "polish",
+    "qwen4b_output": "在发送之前，请先将内容发给我审核。",
+    "qwen4b_time": 0.373,
+    "qwen9b_output": "发布前，请先将内容与我核对。",
+    "qwen9b_time": 0.585
+  },
+  {
+    "index": 42,
+    "raw_text": "发之前内容都先跟我过一下。",
+    "char_count": 13,
+    "prompt": "translate",
+    "qwen4b_output": "Check the content before sending it.",
+    "qwen4b_time": 0.332,
+    "qwen9b_output": "Let me review the content before I send it.",
+    "qwen9b_time": 0.631
+  },
+  {
+    "index": 43,
+    "raw_text": "行吧，那你准备发布。",
+    "char_count": 10,
+    "prompt": "polish",
+    "qwen4b_output": "你可以发布。",
+    "qwen4b_time": 0.286,
+    "qwen9b_output": "行，请准备发布。",
+    "qwen9b_time": 0.515
+  },
+  {
+    "index": 43,
+    "raw_text": "行吧，那你准备发布。",
+    "char_count": 10,
+    "prompt": "translate",
+    "qwen4b_output": "Okay, go ahead and release it.",
+    "qwen4b_time": 0.342,
+    "qwen9b_output": "Alright, then go ahead and publish it.",
+    "qwen9b_time": 0.574
+  },
+  {
+    "index": 44,
+    "raw_text": "你有没有之前的录音可以用啊？",
+    "char_count": 14,
+    "prompt": "polish",
+    "qwen4b_output": "您是否有之前的录音可以提供？",
+    "qwen4b_time": 0.323,
+    "qwen9b_output": "是否可以使用之前的录音？",
+    "qwen9b_time": 0.49
+  },
+  {
+    "index": 44,
+    "raw_text": "你有没有之前的录音可以用啊？",
+    "char_count": 14,
+    "prompt": "translate",
+    "qwen4b_output": "Do you have any previous recordings you can use?",
+    "qwen4b_time": 0.362,
+    "qwen9b_output": "Do you have any previous recordings I can use?",
+    "qwen9b_time": 0.594
+  },
+  {
+    "index": 45,
+    "raw_text": "等等，先做完测试吧。",
+    "char_count": 10,
+    "prompt": "polish",
+    "qwen4b_output": "先完成测试。",
+    "qwen4b_time": 0.296,
+    "qwen9b_output": "请先完成测试。",
+    "qwen9b_time": 0.479
+  },
+  {
+    "index": 45,
+    "raw_text": "等等，先做完测试吧。",
+    "char_count": 10,
+    "prompt": "translate",
+    "qwen4b_output": "Wait, let's finish the test first.",
+    "qwen4b_time": 0.361,
+    "qwen9b_output": "Wait, let's finish the tests first.",
+    "qwen9b_time": 0.579
+  },
+  {
+    "index": 46,
+    "raw_text": "明白了，那我们应该把这个逻辑内嵌在整个热词的存储里面，就用户不需要去理解这个热词是怎么拆分的，但你需要在用户保存完一个热词之后，给他做好拆分是模型能够理解。但还有一个问题，这个拆分方式是对所有模型都适用的吗？比如说我们现在的配置是同一套热词，但是模型用户可能会切换到火山或者本地的这个sense voice。那要怎么办呢？。",
+    "char_count": 162,
+    "prompt": "polish",
+    "qwen4b_output": "明白了，我们应将这一逻辑嵌入到整个热词的存储体系中。用户无需理解热词的具体拆分方式，但需在用户保存完一个热词后，确保其拆分方式符合模型的理解需求。此外，还有一个问题需要考虑：这种拆分方式是否适用于所有模型？例如，目前我们的配置使用的是同一套热词，但用户可能切换到火山或本地的Sense Voice模型。这种情况下应如何处理？",
+    "qwen4b_time": 1.382,
+    "qwen9b_output": "明白了，应将热词拆分逻辑内嵌于存储机制中：用户在保存热词时无需了解拆分原理，但系统需在保存完成后自动完成拆分，确保模型能够理解。然而，当前存在一个关键问题：该拆分方式是否适用于所有模型？例如，现有配置采用统一的热词库，但用户可能切换至火山引擎或本地 SenseVoice 模型。对此该如何应对？",
+    "qwen9b_time": 2.206
+  },
+  {
+    "index": 46,
+    "raw_text": "明白了，那我们应该把这个逻辑内嵌在整个热词的存储里面，就用户不需要去理解这个热词是怎么拆分的，但你需要在用户保存完一个热词之后，给他做好拆分是模型能够理解。但还有一个问题，这个拆分方式是对所有模型都适用的吗？比如说我们现在的配置是同一套热词，但是模型用户可能会切换到火山或者本地的这个sense voice。那要怎么办呢？。",
+    "char_count": 162,
+    "prompt": "translate",
+    "qwen4b_output": "We should embed this logic into the entire hotword storage system. That way, users don't need to understand how the hotwords are split. However, after a user saves a hotword, you need to ensure that the split is understood by the model. But there's another issue: is this splitting method applicable to all models? For example, our current configuration uses the same set of hotwords, but users might switch to火山 or the local sense voice model. What should we do in that case?",
+    "qwen4b_time": 1.487,
+    "qwen9b_output": "Got it. We should embed this logic directly into the hotword storage mechanism, so users don't need to understand how the hotwords are split. However, once a user saves a hotword, the system must automatically perform the splitting to ensure the model can interpret it. But there's another question: Is this splitting approach universally applicable across all models? For instance, our current setup uses a single set of hotwords, but users might switch between models like Volcano or the local SenseVoice. How should we handle that scenario?",
+    "qwen9b_time": 2.675
+  },
+  {
+    "index": 47,
+    "raw_text": "你是不是看错了type for me这种怎么会在模型的词表里面？",
+    "char_count": 32,
+    "prompt": "polish",
+    "qwen4b_output": "你是不是看错了“type for me”这种表达，为什么它会出现在模型的词表中？",
+    "qwen4b_time": 0.485,
+    "qwen9b_output": "您是否看错了？\"type for me\"这类表达为何会出现在模型的词表中？",
+    "qwen9b_time": 0.769
+  },
+  {
+    "index": 47,
+    "raw_text": "你是不是看错了type for me这种怎么会在模型的词表里面？",
+    "char_count": 32,
+    "prompt": "translate",
+    "qwen4b_output": "Did you misread \"type for me\" and that's why it's in the model's vocabulary?",
+    "qwen4b_time": 0.508,
+    "qwen9b_output": "Did I misunderstand? How could a phrase like \"type for me\" possibly be in the model's vocabulary?",
+    "qwen9b_time": 0.868
+  },
+  {
+    "index": 48,
+    "raw_text": "他不在词表里的话，我能给他加进词表里吗？",
+    "char_count": 20,
+    "prompt": "polish",
+    "qwen4b_output": "如果该词不在词表中，我可以将其添加到词表中吗？",
+    "qwen4b_time": 0.436,
+    "qwen9b_output": "若该词未收录于词表中，我可将其添加进去。",
+    "qwen9b_time": 0.666
+  },
+  {
+    "index": 48,
+    "raw_text": "他不在词表里的话，我能给他加进词表里吗？",
+    "char_count": 20,
+    "prompt": "translate",
+    "qwen4b_output": "If he's not in the vocabulary, can I add him to the vocabulary?",
+    "qwen4b_time": 0.455,
+    "qwen9b_output": "If he's not on the word list, can I add him to it?",
+    "qwen9b_time": 0.751
+  },
+  {
+    "index": 49,
+    "raw_text": "你前面那个参数beam size，我们也是需要有热词的呀。",
+    "char_count": 29,
+    "prompt": "polish",
+    "qwen4b_output": "您前面提到的beam size参数，我们也需要设置热词。",
+    "qwen4b_time": 0.403,
+    "qwen9b_output": "前述参数 Beam Size 同样需要配置热词。",
+    "qwen9b_time": 0.605
+  },
+  {
+    "index": 49,
+    "raw_text": "你前面那个参数beam size，我们也是需要有热词的呀。",
+    "char_count": 29,
+    "prompt": "translate",
+    "qwen4b_output": "You also need to include some hot words for the beam size parameter in front of you.",
+    "qwen4b_time": 0.475,
+    "qwen9b_output": "The same applies to the beam size parameter you mentioned earlier—we need热词 (hotwords) for it as well.",
+    "qwen9b_time": 0.892
+  }
+]

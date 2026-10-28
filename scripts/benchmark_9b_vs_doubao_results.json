@@ -1,0 +1,402 @@
+[
+  {
+    "index": 0,
+    "raw_text": "你分析一下特斯拉 Model Y 的数据 结合全面的二手车估价方式告诉我我如果现在买一台 Model Y 开三年每年1万 mile 三年后大概值多少钱 给我详细的贬值分析报告",
+    "char_count": 87,
+    "prompt": "polish",
+    "doubao_output": "请你分析特斯拉Model Y的相关数据，结合通用的二手车估价方法，帮我测算：如果现在购买一台Model Y，每年行驶1万英里，三年后车辆大概还值多少钱，并为我提供一份详细的贬值分析报告。",
+    "doubao_time": 1.195,
+    "qwen9b_output": "1. 请分析特斯拉 Model Y 的相关数据，并结合全面的二手车估价方法，为我提供一份详细的贬值分析报告。\n2. 报告需基于以下用车场景进行测算：当前购入，每年行驶里程 1 万英里，持续使用三年。\n3. 最终结论应明确预测该车辆三年后的剩余价值。",
+    "qwen9b_time": 1.9
+  },
+  {
+    "index": 0,
+    "raw_text": "你分析一下特斯拉 Model Y 的数据 结合全面的二手车估价方式告诉我我如果现在买一台 Model Y 开三年每年1万 mile 三年后大概值多少钱 给我详细的贬值分析报告",
+    "char_count": 87,
+    "prompt": "translate",
+    "doubao_output": "Could you analyze the data for the Tesla Model Y, incorporate comprehensive used car valuation methods, and tell me roughly how much a Model Y I buy now would be worth three years from now, assuming I drive 10,000 miles per year? Please also give me a detailed depreciation analysis report.",
+    "doubao_time": 1.55,
+    "qwen9b_output": "Please analyze the data for the Tesla Model Y and provide a comprehensive depreciation report. Specifically, calculate the vehicle's estimated value after three years of ownership with 10,000 miles driven annually, based on current market conditions and full secondary market valuation methods. Include a detailed breakdown of the factors contributing to its depreciation.",
+    "qwen9b_time": 1.832
+  },
+  {
+    "index": 1,
+    "raw_text": "我们现在的这个设置页面的窗口是可以调整大小的你看一下我现在的窗口大小把它设置成作为默认大小 但另外还有一个问题是 不同分辨率的机型对于这个大小会怎么处理都会等比变化吗比如说我现在是32寸的那我如果放到14寸的 MacBook 上因为我现在的尺寸是能够完整显示完通用设置里面内容那换过去也是可以的吗",
+    "char_count": 148,
+    "prompt": "polish",
+    "doubao_output": "我们现在设置页面的窗口是可以调整大小的，我想把当前的窗口大小设为默认大小。但我还有一个问题：不同分辨率的机型会对这个默认大小做什么处理，窗口大小会跟着等比变化吗？比如我现在用的是32寸的屏幕，默认大小可以完整显示完通用设置里的全部内容，如果换到14寸的MacBook上，也能完整显示吗？",
+    "doubao_time": 1.386,
+    "qwen9b_output": "当前设置页面的窗口支持调整大小。请将窗口设置为默认尺寸，以便观察其在不同分辨率机型上的表现：例如，若当前 32 英寸显示器能完整显示“通用设置”内容，请问该窗口迁移至 14 英寸 MacBook 时，是否会自动等比缩放以确保内容完整显示？",
+    "qwen9b_time": 1.895
+  },
+  {
+    "index": 1,
+    "raw_text": "我们现在的这个设置页面的窗口是可以调整大小的你看一下我现在的窗口大小把它设置成作为默认大小 但另外还有一个问题是 不同分辨率的机型对于这个大小会怎么处理都会等比变化吗比如说我现在是32寸的那我如果放到14寸的 MacBook 上因为我现在的尺寸是能够完整显示完通用设置里面内容那换过去也是可以的吗",
+    "char_count": 148,
+    "prompt": "translate",
+    "doubao_output": "The window of our current settings page is resizable. Look, I'm going to set my current window size as the default. But I have another question: how will this size be handled on devices with different resolutions? Will it scale proportionally? For example, I'm using a 32-inch display now. If I move this to a 14-inch MacBook, my current size can fit all the content in the general settings completely, will that still work after switching?",
+    "doubao_time": 1.41,
+    "qwen9b_output": "In the current settings page, the window is resizable. Could you check and set its size as the default? There's another concern: how will this size adapt across devices with different resolutions—will it scale proportionally? For instance, if I set it to fit fully on my current 32-inch screen, will it still display the General settings content completely when opened on a 14-inch MacBook?",
+    "qwen9b_time": 2.287
+  },
+  {
+    "index": 2,
+    "raw_text": "中文热词基本都不需要。然后英文热词你需要考虑的不是我历史上其他的项目是什么样的，而是这个东西是要开放出去给大家用的。所以我私人的那些项目不需要，比如说电商和金融。但是嗯这个输入法现在比较关注的是关注AI领域的那些人。所以他们日常会用到的那些，特别是英文词汇是需要重点关注的。你可以再梳理一版。",
+    "char_count": 146,
+    "prompt": "polish",
+    "doubao_output": "中文热词基本都不需要。英文热词的考量标准，不能参考我以往其他项目的情况，因为这个产品是开放给大众使用的，我私人涉及的电商、金融类项目不需要纳入考量。目前这款输入法更关注活跃在AI领域的用户，需要重点收录这类用户日常常用的英文词汇。请你再梳理一版。",
+    "doubao_time": 1.348,
+    "qwen9b_output": "中文热词基本无需涉及。英文热词的筛选标准不应参考过往项目，而应聚焦于开放共享后的实际应用场景。私人领域的电商与金融类词汇无需纳入，但输入法项目需重点覆盖 AI 领域从业者的高频使用词汇，尤其是日常输入的英文术语。请据此重新梳理一版方案。",
+    "qwen9b_time": 1.876
+  },
+  {
+    "index": 2,
+    "raw_text": "中文热词基本都不需要。然后英文热词你需要考虑的不是我历史上其他的项目是什么样的，而是这个东西是要开放出去给大家用的。所以我私人的那些项目不需要，比如说电商和金融。但是嗯这个输入法现在比较关注的是关注AI领域的那些人。所以他们日常会用到的那些，特别是英文词汇是需要重点关注的。你可以再梳理一版。",
+    "char_count": 146,
+    "prompt": "translate",
+    "doubao_output": "Basically, we don't need trending Chinese terms. For trending English terms, what you need to consider is not what my other previous projects were like — this product is going to be open for public use. So my private projects don't count here, for example, e-commerce and finance. But right now, this input method is mainly targeted at people who focus on the AI field. Therefore, the English words they use frequently in daily work need to be prioritized. Could you sort this out into a new version?",
+    "doubao_time": 1.522,
+    "qwen9b_output": "Most hotwords in Chinese aren't necessary. For the English hotwords, don't base your decisions on my past projects but rather on what needs to be open and accessible to everyone. Personal projects like e-commerce and finance aren't relevant here. Instead, since this input method is now focused on the AI community, the priority is on the English terms they actually use in their daily work. Please go ahead and revise the list accordingly.",
+    "qwen9b_time": 2.347
+  },
+  {
+    "index": 3,
+    "raw_text": "对啊，我的意思是这个版本虽然没有延迟，但识别的效果也不好啊，像那个coding的识别都做不好，那这个已经很基础了，所以完整的那个录音识别也是要的。我们要想的是怎么优化录音识别的效率，而不是把它抛弃掉，或者流式识别像这一类的问题你能解决好吗",
+    "char_count": 119,
+    "prompt": "polish",
+    "doubao_output": "对啊，我的意思是，这个版本虽然没有延迟，但识别效果不好，连最基础的coding识别都做不好，因此完整的录音识别还是有必要保留的。我们要思考的是怎么优化录音识别的效率，而不是直接抛弃它。你能解决流式识别这类问题吗？",
+    "doubao_time": 1.175,
+    "qwen9b_output": "对，我的核心观点是：虽然当前版本消除了延迟，但识别效果仍不理想，连基础的 Coding 代码识别都无法胜任，因此完整的录音识别功能不可或缺。我们不应考虑抛弃该功能或转向流式识别，而应致力于优化录音识别的效率，请问能否解决这一类问题？",
+    "qwen9b_time": 1.811
+  },
+  {
+    "index": 3,
+    "raw_text": "对啊，我的意思是这个版本虽然没有延迟，但识别的效果也不好啊，像那个coding的识别都做不好，那这个已经很基础了，所以完整的那个录音识别也是要的。我们要想的是怎么优化录音识别的效率，而不是把它抛弃掉，或者流式识别像这一类的问题你能解决好吗",
+    "char_count": 119,
+    "prompt": "translate",
+    "doubao_output": "Yes, what I mean is even though this version has no latency, its recognition performance is still pretty poor. It can't even get coding right, which is such a basic thing. So we still need the complete audio recording recognition feature. What we should figure out is how to optimize the efficiency of recording recognition, instead of getting rid of it entirely. By the way, can you fix problems like the streaming recognition issue?",
+    "doubao_time": 2.146,
+    "qwen9b_output": "Right, what I mean is that while this version has no latency, the recognition quality isn't great either—it struggles even with basic tasks like coding. Since full transcription is a fundamental requirement, we should focus on optimizing the efficiency of the full recording recognition rather than discarding it. Can you help resolve issues like this with stream-based recognition?",
+    "qwen9b_time": 1.951
+  },
+  {
+    "index": 4,
+    "raw_text": "现在设置完 语言切换之后还有几个地方的 语言没有被切换过来比如说语音识别引擎LLM 文本处理 还有处理模式里面的整个页面 还有 About 的整个页面 只有那种用户输入的是可以继续按原文展示的剩下的都应该被定义成系统文案或免的比如说 ASR 热词然后自定义模式里面具体 但内置模式是需要支持双语言的",
+    "char_count": 149,
+    "prompt": "polish",
+    "doubao_output": "完成语言切换设置后，仍有几个部分的语言未完成切换，具体包括：\n1. 语音识别引擎、LLM文本处理板块\n2. 处理模式的完整页面\n3. About的完整页面\n\n规则说明：仅用户输入内容可保留原文展示，其余内容都应归类为系统文案进行翻译切换，例如ASR热词；自定义模式内的具体内容除外，内置模式需要支持双语切换。",
+    "doubao_time": 3.007,
+    "qwen9b_output": "设置完语言切换后，仍有部分界面元素未同步切换，主要包括：语音识别引擎、LLM、文本处理及处理模式中的整个页面，以及 About 页面。具体调整建议如下：\n\n1.  **保留原文场景**：仅当用户主动输入时，内容可保持原文展示。\n2.  **统一系统文案**：除上述用户输入内容外，其余部分（如 ASR 热词、自定义模式及内置模式中的具体描述）均应定义为系统文案，并适配目标语言。\n3.  **特殊模式要求**：内置模式需支持双语展示。",
+    "qwen9b_time": 3.065
+  },
+  {
+    "index": 4,
+    "raw_text": "现在设置完 语言切换之后还有几个地方的 语言没有被切换过来比如说语音识别引擎LLM 文本处理 还有处理模式里面的整个页面 还有 About 的整个页面 只有那种用户输入的是可以继续按原文展示的剩下的都应该被定义成系统文案或免的比如说 ASR 热词然后自定义模式里面具体 但内置模式是需要支持双语言的",
+    "char_count": 149,
+    "prompt": "translate",
+    "doubao_output": "After setting up the language switch, there are still several sections whose language hasn’t been changed. For example, the entire pages of the speech recognition engine LLM, text processing, processing mode, and the About page have not been switched. Only user-input content can remain displayed in the original text; all the rest should be classified as system copy. For example, ASR hotwords, and the content inside custom mode. In contrast, the built-in mode needs to support bilingual switching.",
+    "doubao_time": 1.75,
+    "qwen9b_output": "After switching the language settings, there are still a few areas where the language hasn't been updated, such as the Speech Recognition Engine, LLM, Text Processing, and the entire page for Processing Modes, as well as the About page. Only user input should continue to display in the original language; everything else should be defined as system copy, including ASR hotwords and specific settings within Custom Mode. However, Built-in Modes need to support bilingual display.",
+    "qwen9b_time": 2.39
+  },
+  {
+    "index": 5,
+    "raw_text": "我现在用的是森海塞尔的 profile 麦克风，但是我感觉它其实在我离得比较远的时候识别的也不是非常准和清晰，以及指向性不是特别好，我如果想换一个麦克风的话，可以换什么麦克",
+    "char_count": 86,
+    "prompt": "polish",
+    "doubao_output": "我现在使用的是森海塞尔Profile麦克风，我感觉它在我离得比较远的时候收音准确率和清晰度都不算高，指向性也不太好，如果我想更换麦克风，有什么推荐吗？",
+    "doubao_time": 1.068,
+    "qwen9b_output": "我目前使用的是森海塞尔 Profile 麦克风。但在距离较远时，我发现其语音识别的准确率与清晰度不足，且指向性表现不够理想。若计划更换设备，您是否有推荐的型号？",
+    "qwen9b_time": 1.3
+  },
+  {
+    "index": 5,
+    "raw_text": "我现在用的是森海塞尔的 profile 麦克风，但是我感觉它其实在我离得比较远的时候识别的也不是非常准和清晰，以及指向性不是特别好，我如果想换一个麦克风的话，可以换什么麦克",
+    "char_count": 86,
+    "prompt": "translate",
+    "doubao_output": "Right now I'm using the Sennheiser Profile microphone. But I feel that when I'm relatively far away from it, the pickup isn't very accurate or clear, and its directionality isn't that great either. If I want to replace this microphone, what options should I consider?",
+    "doubao_time": 1.484,
+    "qwen9b_output": "I'm currently using a Sennheiser Profile microphone, but I've found that its recognition accuracy and clarity drop off when I move a bit away, and its directional performance isn't great either. If I decide to upgrade, what microphone would you recommend?",
+    "qwen9b_time": 1.527
+  },
+  {
+    "index": 6,
+    "raw_text": "如何在现在的这个 APP 里面加上更新读取的概念？去获取 GitHub 上面有没有代码更新，有的话显示更新内容。同时我们确实要找个地方在 GitHub 上面 维护本次更新了什么东西？这个更新不能是自动的，而是要人写的一些关键的特性，让已经部署完的用户在他们的产品端可以获取到理解",
+    "char_count": 139,
+    "prompt": "polish",
+    "doubao_output": "如何在当前的APP中加入更新读取功能，获取GitHub上是否有代码更新，如果有更新则展示更新内容？同时我们需要在GitHub上找个位置来专门维护本次更新的内容：更新说明不能是自动生成的，必须由人工撰写关键特性，方便已经完成部署的用户在产品端查看并理解更新内容。",
+    "doubao_time": 1.45,
+    "qwen9b_output": "如何在当前 APP 中实现“更新读取”功能？具体需求如下：\n\n1.  **检测更新**：自动获取 GitHub 上的代码更新状态。\n2.  **展示内容**：若存在更新，需显示具体的更新内容。\n3.  **人工维护**：更新信息不能自动抓取，必须由人工在 GitHub 上编写本次更新的关键特性说明。\n4.  **用户触达**：确保已部署的用户在其产品端能够获取并理解这些更新内容。",
+    "qwen9b_time": 2.616
+  },
+  {
+    "index": 6,
+    "raw_text": "如何在现在的这个 APP 里面加上更新读取的概念？去获取 GitHub 上面有没有代码更新，有的话显示更新内容。同时我们确实要找个地方在 GitHub 上面 维护本次更新了什么东西？这个更新不能是自动的，而是要人写的一些关键的特性，让已经部署完的用户在他们的产品端可以获取到理解",
+    "char_count": 139,
+    "prompt": "translate",
+    "doubao_output": "How do we add an update checking feature to the current app that checks GitHub for code updates, and displays the release notes when a new update is available?\nMeanwhile, we need to host the update logs on GitHub. These updates shouldn't be generated automatically; they should be manually written notes highlighting key new features, so that users who have already deployed our product can access and understand the update information on their end.",
+    "doubao_time": 2.192,
+    "qwen9b_output": "How do we implement an update check mechanism in this app? We need to detect code updates on GitHub and display the relevant changes if any are found. Additionally, we must designate a specific location on GitHub to maintain a changelog detailing what has been updated. This update process shouldn't be fully automated; instead, it should highlight key features manually documented by the team, ensuring that users who have already deployed the app can understand and access the new functionality.",
+    "qwen9b_time": 2.292
+  },
+  {
+    "index": 7,
+    "raw_text": "我们现在那个 Type for me 的项目我觉得距离想要做到跟 tpls 一样的体验还有一定的差距主要在两个点一个是 ASR 识别的准确性另外一个是大模型处理的 效果分别从这两个角度去思考一下包括去网上看一下特定现在核心的 feature 给我一个方案",
+    "char_count": 127,
+    "prompt": "polish",
+    "doubao_output": "我们现在Type for me项目，我认为距离达到和tpls一样的体验还有一定差距，问题主要出在两点：一个是ASR识别的准确性，另一个是大模型处理的效果。请你分别从这两个角度梳理，查阅相关资料，针对目前核心功能给我出一份方案。",
+    "doubao_time": 1.81,
+    "qwen9b_output": "关于 Type for Me 项目，目前距离实现与 Tpls 同等体验水平仍存在一定差距，主要集中体现在以下两点：\n\n1. ASR（语音识别）的准确性有待提升；\n2. 大模型的处理效果尚需优化。\n\n建议从上述两个维度出发，结合对当前核心功能的线上调研，制定具体的改进方案。",
+    "qwen9b_time": 1.973
+  },
+  {
+    "index": 7,
+    "raw_text": "我们现在那个 Type for me 的项目我觉得距离想要做到跟 tpls 一样的体验还有一定的差距主要在两个点一个是 ASR 识别的准确性另外一个是大模型处理的 效果分别从这两个角度去思考一下包括去网上看一下特定现在核心的 feature 给我一个方案",
+    "char_count": 127,
+    "prompt": "translate",
+    "doubao_output": "Regarding our current \"Type for me\" project, I believe there's still a certain gap between where we are now and the user experience we want to achieve, which matches what TPLS offers. The gap mainly lies in two aspects:\n1. The recognition accuracy of ASR (Automatic Speech Recognition)\n2. The processing performance of large language models\n\nCould you think through these two areas separately, do some online research, and put together a proposal focusing on our current core features?",
+    "doubao_time": 1.941,
+    "qwen9b_output": "Regarding the \"Type for me\" project, I feel there's still a gap before we can match the experience of TPLs. The main issues lie in two areas: ASR recognition accuracy and the performance of the large language model. Please think through both angles, research specific core features currently available online, and propose a solution.",
+    "qwen9b_time": 1.835
+  },
+  {
+    "index": 8,
+    "raw_text": "找到问题了，豆包有两种流式识别模型，我们写死了，但可能你没有开通我们写死的那一个，就会报错。现在两种都支持，也支持自动识别。以及你可以看一下后台，它两种，你如果都开了的话，都有送额度。这两个用起来是一样的，相当于会送两份额度。",
+    "char_count": 113,
+    "prompt": "polish",
+    "doubao_output": "找到问题了：我们原本只固定适配了豆包的两种流式识别模型中的一种，如果你没开通我们写死的这一种，就会出现报错。现在我们已经调整为同时支持两种模型，也支持自动识别模式。\n你可以去后台查看，两种模型都开通的话都会赠送额度，两个模型的使用体验一致，相当于一共会赠送两份额度。",
+    "doubao_time": 1.588,
+    "qwen9b_output": "已定位问题。豆包提供两种流式识别模型，若代码中写死了某一种而该模型未开通，则会导致报错；当前两种模型均已支持，并可启用自动识别。\n\n建议检查后台配置：\n1. 确保两种流式识别模型均已开通。\n2. 若两者均启用，系统将分别赠送对应额度，相当于获得双倍资源。",
+    "qwen9b_time": 2.093
+  },
+  {
+    "index": 8,
+    "raw_text": "找到问题了，豆包有两种流式识别模型，我们写死了，但可能你没有开通我们写死的那一个，就会报错。现在两种都支持，也支持自动识别。以及你可以看一下后台，它两种，你如果都开了的话，都有送额度。这两个用起来是一样的，相当于会送两份额度。",
+    "char_count": 113,
+    "prompt": "translate",
+    "doubao_output": "Got it, the issue is as follows: Doubao has two streaming recognition models, and we hardcoded the model selection. If you haven't activated the hardcoded one, an error will occur. Now both models are supported, and automatic model detection is enabled as well.\n\nYou can check your backend: if you've activated both models, you'll get quota for both. They function the same in use, which means you get two separate batches of free quota.",
+    "doubao_time": 1.647,
+    "qwen9b_output": "The issue has been identified. Doubao has two streaming recognition models; we've hardcoded one, but if your account doesn't have that specific model enabled, you'll encounter an error. Now, both models are supported, along with automatic model selection. Additionally, please check the backend—if both models are enabled, you'll receive credits for both, effectively doubling your available quota.",
+    "qwen9b_time": 1.996
+  },
+  {
+    "index": 9,
+    "raw_text": "你总结一下我们刚刚改了什么以及呃其他的户如果要正确的部署好这个本地识别的能力它需要做哪一些步骤看看我们现在read me里面写的步骤有没有说清楚了把它一起给改掉然后把代码推上去",
+    "char_count": 88,
+    "prompt": "polish",
+    "doubao_output": "请你总结一下我们刚刚修改的内容，梳理出其他用户正确部署本地识别能力需要完成的全部步骤，检查当前README里写明的步骤是否表述清晰，将相关内容一并修改完善后，把代码推送上去。",
+    "doubao_time": 1.216,
+    "qwen9b_output": "1. 总结本次修改内容。\n2. 梳理其他用户部署本地识别能力的正确步骤，并核对 README 文档是否表述清晰；若有遗漏或错误，请一并修正。\n3. 完成上述工作后，将代码推送到仓库。",
+    "qwen9b_time": 1.597
+  },
+  {
+    "index": 9,
+    "raw_text": "你总结一下我们刚刚改了什么以及呃其他的户如果要正确的部署好这个本地识别的能力它需要做哪一些步骤看看我们现在read me里面写的步骤有没有说清楚了把它一起给改掉然后把代码推上去",
+    "char_count": 88,
+    "prompt": "translate",
+    "doubao_output": "Could you summarize the changes we just made, outline the steps that other users need to follow to correctly deploy this local recognition capability, check whether the steps written in our current README are clear enough, revise all the content as needed, and then push the code?",
+    "doubao_time": 1.047,
+    "qwen9b_output": "Summarize the changes we just made. Then, outline the necessary steps for other users to correctly deploy local recognition capabilities. Review our current README to ensure these steps are clearly documented, update it accordingly, and push the code.",
+    "qwen9b_time": 1.716
+  },
+  {
+    "index": 10,
+    "raw_text": "这一些能力靠的就是两个 API 来实现，一个是语音识别的 API，我这里用的是火山引擎上的豆包语音，另外一个是 大模型 API 我用的是火山上的 CodingPlan，你有其他的 CodingPlan 的话也可以加进来，约等于不要钱。就算按量付费的话，开销应该也非常小。设置里面还支持了 关键词",
+    "char_count": 147,
+    "prompt": "polish",
+    "doubao_output": "这些能力依靠两个API实现：一个是语音识别API，我这里使用的是火山引擎上的豆包语音；另一个是大模型API，我用的是火山上的CodingPlan，如果你有其他的CodingPlan也可以添加进来，基本不需要花钱，就算按量付费，开销也非常小。设置中还支持关键词。",
+    "doubao_time": 1.125,
+    "qwen9b_output": "实现上述功能主要依赖两个 API：\n1. 语音识别 API：采用火山引擎豆包语音；\n2. 大模型 API：采用火山引擎 CodingPlan。\n\n若需扩展，也可接入其他 CodingPlan。无论是按量付费还是其他计费方式，成本都极低。此外，设置中还支持关键词功能。",
+    "qwen9b_time": 1.864
+  },
+  {
+    "index": 10,
+    "raw_text": "这一些能力靠的就是两个 API 来实现，一个是语音识别的 API，我这里用的是火山引擎上的豆包语音，另外一个是 大模型 API 我用的是火山上的 CodingPlan，你有其他的 CodingPlan 的话也可以加进来，约等于不要钱。就算按量付费的话，开销应该也非常小。设置里面还支持了 关键词",
+    "char_count": 147,
+    "prompt": "translate",
+    "doubao_output": "All these capabilities are implemented with two APIs. One is the speech recognition API, and I'm using Doubao Speech from Volcano Engine for this part. The other is a large language model API, and I'm using CodingPlan from Volcano Engine. You can add other CodingPlan services if you have alternatives. It's basically free. Even if you go with pay-as-you-go pricing, the cost will still be very low. Keyword support is also available in the settings.",
+    "doubao_time": 1.443,
+    "qwen9b_output": "These capabilities are powered by just two APIs: a speech recognition API (I'm using Doubao Speech from Volcengine) and a large model API (I'm using CodingPlan from Volcengine). You can also add your own CodingPlan if you have one—it's practically free. Even with pay-per-use pricing, the costs are minimal. Additionally, the settings support keyword configuration.",
+    "qwen9b_time": 2.045
+  },
+  {
+    "index": 11,
+    "raw_text": "我要给我的 Type for me 的项目去做一个小红书帖子第一步是要做一张小红书视频的封面帮我找一下 GitHub 上面有哪一些适合用来生成 小红书封面的 skill",
+    "char_count": 84,
+    "prompt": "polish",
+    "doubao_output": "我要给我的「Type for me」项目做一篇小红书帖子，第一步需要制作一张小红书视频封面，请帮我查找GitHub上有哪些适合生成小红书封面的技能。",
+    "doubao_time": 0.935,
+    "qwen9b_output": "1. 我计划为 Type for Me 项目发布一篇小红书帖子。\n2. 第一步是制作小红书视频封面，需要寻找 GitHub 上适合生成此类封面的技能或工具。",
+    "qwen9b_time": 1.258
+  },
+  {
+    "index": 11,
+    "raw_text": "我要给我的 Type for me 的项目去做一个小红书帖子第一步是要做一张小红书视频的封面帮我找一下 GitHub 上面有哪一些适合用来生成 小红书封面的 skill",
+    "char_count": 84,
+    "prompt": "translate",
+    "doubao_output": "I need to create a Xiaohongshu post for my \"Type for me\" project. The first step is to make a cover for the Xiaohongshu video. Could you find out what suitable GitHub repositories are available for generating Xiaohongshu covers?",
+    "doubao_time": 1.06,
+    "qwen9b_output": "I need to create a Xiaohongshu post for my Type for me project. The first step is to design a cover image for a Xiaohongshu video. Can you help me find some GitHub skills or tools suitable for generating Xiaohongshu covers?",
+    "qwen9b_time": 1.563
+  },
+  {
+    "index": 12,
+    "raw_text": "没有那种消费我们通过流量是手段是做不了所以那种情况他天然就是不会生效的这里我其实想说就是说对那种主端激活的就他可能在内容上有一些稀稀拉拉的消费但是这种用户他其实可能没有电商价值了我觉得",
+    "char_count": 92,
+    "prompt": "polish",
+    "doubao_output": "如果不靠消费，只靠流量作为手段是做不成的，这种情况天然就不会生效。我在这里其实想说的是，针对那些只完成了主端激活的用户，他们可能只是零零散散地点开消费过内容，这类用户实际上已经不具备电商价值了。",
+    "doubao_time": 4.328,
+    "qwen9b_output": "1. 单纯依赖流量手段无法达成消费转化，此类情况天然无效。\n2. 对于主端激活的用户，即便其在内容层面存在零星消费，也往往不具备电商价值。",
+    "qwen9b_time": 1.305
+  },
+  {
+    "index": 12,
+    "raw_text": "没有那种消费我们通过流量是手段是做不了所以那种情况他天然就是不会生效的这里我其实想说就是说对那种主端激活的就他可能在内容上有一些稀稀拉拉的消费但是这种用户他其实可能没有电商价值了我觉得",
+    "char_count": 92,
+    "prompt": "translate",
+    "doubao_output": "Without that kind of consumer spending, we cannot achieve [our goal] through traffic as a means. Therefore, this scenario naturally won't work. What I actually want to say here is that for those users who activated the main app, even though they might occasionally browse and engage with content sparsely, these users actually no longer have e-commerce value, in my opinion.",
+    "doubao_time": 1.985,
+    "qwen9b_output": "There's no scenario where we can't drive consumption through traffic alone; under those circumstances, it simply won't work. What I'm trying to convey is this: for users primarily activated via main endpoints, they may show sporadic engagement with content, but in reality, they likely hold no real e-commerce value.",
+    "qwen9b_time": 1.751
+  },
+  {
+    "index": 13,
+    "raw_text": "我们那个type for me的项目在设置端里面加一个支持关掉流式识别的功能，关掉之后，悬浮窗就只展示识别中固定的然后其他的流程不变，但是对应的会需要看一下现在的各个模型，如何把流式识别的引擎切换成录音识别的引擎。",
+    "char_count": 107,
+    "prompt": "polish",
+    "doubao_output": "在我们type for me项目的设置端中添加一个关闭流式识别的功能，关闭后，悬浮窗仅展示“识别中”固定提示，其余流程保持不变。需要同步梳理现有的各个模型，研究如何将流式识别引擎切换为录音识别引擎。",
+    "doubao_time": 1.567,
+    "qwen9b_output": "针对 Type for Me 项目，建议在设置端新增“关闭流式识别”的功能选项。关闭该选项后，悬浮窗将仅展示识别中固定的内容，其余流程保持不变。同时，需评估当前各模型如何将流式识别引擎切换为录音识别引擎。",
+    "qwen9b_time": 1.63
+  },
+  {
+    "index": 13,
+    "raw_text": "我们那个type for me的项目在设置端里面加一个支持关掉流式识别的功能，关掉之后，悬浮窗就只展示识别中固定的然后其他的流程不变，但是对应的会需要看一下现在的各个模型，如何把流式识别的引擎切换成录音识别的引擎。",
+    "char_count": 107,
+    "prompt": "translate",
+    "doubao_output": "For our \"type for me\" project, we need to add an option in the settings to disable streaming recognition. After this feature is turned off, the floating window will only display a fixed \"recognizing\" status, and all other workflows will remain unchanged. However, we need to check how our current models work to figure out how to switch the engine from streaming recognition to non-streaming speech recognition.",
+    "doubao_time": 1.853,
+    "qwen9b_output": "Add a toggle in the settings for the \"Type for Me\" project to disable streaming recognition. Once disabled, the floating window should only display the fixed \"recording\" status, leaving all other workflows unchanged. However, we need to review our current models and determine how to switch the streaming recognition engine to a standard recording recognition engine.",
+    "qwen9b_time": 1.829
+  },
+  {
+    "index": 14,
+    "raw_text": "波形的上下高度可以再高一些红点中间 不需要有别的光晕了反而是红点外面扩散的那个还是没有画出来 它外扩的那个不是只有一条线而是一个圈啊 你要么回看一下我们这个悬浮窗口里面随着麦克风电瓶变化时当最高麦克风时候它的实现是什么样的",
+    "char_count": 111,
+    "prompt": "polish",
+    "doubao_output": "波形的上下高度可以再调高一些。红点中间不需要添加其他光晕，反而红点向外扩散的部分还没有画出来：它的外扩不是只有一条线，而是一个圈。你可以回看一下我们这个悬浮窗口里，随着麦克风电平变化，麦克风音量最高时它的显示效果是什么样的。",
+    "doubao_time": 1.344,
+    "qwen9b_output": "波形的上下高度可适当调高。红点中间无需光晕，但红点外围的扩散效果尚未绘制完成：外扩部分并非单条线，而是一个完整的圆环。请回看悬浮窗口中麦克风电量变化时的实现逻辑，特别是当麦克风电量达到最高时，其具体表现方式。",
+    "qwen9b_time": 1.789
+  },
+  {
+    "index": 14,
+    "raw_text": "波形的上下高度可以再高一些红点中间 不需要有别的光晕了反而是红点外面扩散的那个还是没有画出来 它外扩的那个不是只有一条线而是一个圈啊 你要么回看一下我们这个悬浮窗口里面随着麦克风电瓶变化时当最高麦克风时候它的实现是什么样的",
+    "char_count": 111,
+    "prompt": "translate",
+    "doubao_output": "The vertical amplitude of the waveform can be increased a bit. There is no need for any extra halos inside the red dots. However, the outward diffusion effect outside the red dots has not been drawn yet. It is not just a single line for the outward expansion—it is a full circle. You can go back and check what it looks like in our floating window when the microphone reaches its peak level.",
+    "doubao_time": 1.645,
+    "qwen9b_output": "Can we increase the vertical amplitude of the waveform a bit more? The red dot in the center shouldn't have any glow effect; instead, what's missing is the ring expanding outward from the red dot—it's a full circle, not just a single line. Could you review how our floating window is implemented? Specifically, check what happens when the microphone volume changes and observe how it renders at maximum volume.",
+    "qwen9b_time": 2.121
+  },
+  {
+    "index": 15,
+    "raw_text": "我们就在现在偏好设置里面的第二行加一个设置项吧所以第二行最后会有四个设置项它的样式和交互逻辑记得跟现在其他的那些保持一致然后 剪贴板的设置还是需要 考虑到 是否有没有注入成功我记得我们现在的这个注入成功的判定是比较松的你整体回顾一下这个判定如何判定得更准最终剪贴板是如果注入没有成功那就还是得粘到剪贴板如果注入成功了那就可以 不摘呀",
+    "char_count": 166,
+    "prompt": "polish",
+    "doubao_output": "我们可以在当前偏好设置的第二行新增一个设置项，新增后第二行末尾会共有四个设置项，新增设置项的样式和交互逻辑需要和现有其他设置项保持一致。\n另外剪贴板的设置仍需要考虑注入是否成功的问题：当前我们对注入成功的判定标准比较宽松，需要你整体梳理优化，让判定结果更精准。最终规则为：如果注入未成功，内容仍需要粘到剪贴板；如果注入成功，则不需要粘贴到剪贴板。",
+    "doubao_time": 1.597,
+    "qwen9b_output": "在偏好设置界面的第二行增加一项设置，该行最终应包含四个设置项，其样式与交互逻辑需与现有其他设置保持一致。\n\n关于剪贴板设置，需重点考虑“注入是否成功”这一条件。鉴于当前对注入成功的判定标准较为宽松，建议重新回顾并优化该判定逻辑，以提高准确性。具体处理逻辑如下：\n1. 若注入未成功，剪贴板内容仍需保留；\n2. 若注入成功，则不再进行摘取操作。",
+    "qwen9b_time": 2.666
+  },
+  {
+    "index": 15,
+    "raw_text": "我们就在现在偏好设置里面的第二行加一个设置项吧所以第二行最后会有四个设置项它的样式和交互逻辑记得跟现在其他的那些保持一致然后 剪贴板的设置还是需要 考虑到 是否有没有注入成功我记得我们现在的这个注入成功的判定是比较松的你整体回顾一下这个判定如何判定得更准最终剪贴板是如果注入没有成功那就还是得粘到剪贴板如果注入成功了那就可以 不摘呀",
+    "char_count": 166,
+    "prompt": "translate",
+    "doubao_output": "Let's add a new setting item to the second row in the current preferences. After adding this, there will be four setting items at the end of the second row. Remember to keep its style and interaction logic consistent with all other existing setting items.\n\nFor the clipboard settings, we still need to take into account whether the injection succeeds. As far as I remember, our current injection success check is pretty lax. Could you review the whole checking logic and figure out how to make it more accurate?\n\nIn the end, for the clipboard: if the injection fails, we still need to paste the content to the clipboard; if the injection succeeds, we don't need to do that.",
+    "doubao_time": 2.134,
+    "qwen9b_output": "Let's add a new setting item as the second entry in the current preference list, resulting in four items total on that line. Ensure its styling and interaction logic match the existing ones. Regarding clipboard settings, we need to account for whether the injection was successful. Our current success criterion is quite loose; please review the logic and refine it for greater accuracy. If the injection fails, the content should still be copied to the clipboard; if successful, no copying is needed.",
+    "qwen9b_time": 2.424
+  },
+  {
+    "index": 16,
+    "raw_text": "我在 read me 上面改了一点内容，你改的时候不要覆盖，但你去补充一下给 agent 看的。有些人可能就是直接把这个链接给 agents 然后去部署。你给一段说 agents 要读哪一些，他们 要怎么部署？",
+    "char_count": 105,
+    "prompt": "polish",
+    "doubao_output": "我已经在ReadMe上修改了一部分内容，你修改时不要覆盖原有内容，只需要补充给智能体（agent）查看的相关说明即可。部分使用者会直接把这个链接发给智能体来进行部署，你需要补充一段内容说明智能体需要读取哪些文件、以及具体要怎么完成部署。",
+    "doubao_time": 1.213,
+    "qwen9b_output": "1. 我在 README 文件中补充了一些内容，请在修改时注意不要覆盖已有信息。\n2. 鉴于部分人员会直接将部署链接提供给 Agent 进行部署，建议在文档中增加针对 Agent 的指引说明。\n3. 请补充以下内容：明确 Agent 需要阅读的文档范围，以及具体的部署操作步骤。",
+    "qwen9b_time": 1.869
+  },
+  {
+    "index": 16,
+    "raw_text": "我在 read me 上面改了一点内容，你改的时候不要覆盖，但你去补充一下给 agent 看的。有些人可能就是直接把这个链接给 agents 然后去部署。你给一段说 agents 要读哪一些，他们 要怎么部署？",
+    "char_count": 105,
+    "prompt": "translate",
+    "doubao_output": "I made some minor edits to the README, so please don't overwrite my changes when you work on it. Instead, just add supplementary content for agents to reference. Some people will directly share this link with agents for deployment, so please add a section that clearly tells agents which files they need to read and how to deploy the project.",
+    "doubao_time": 1.446,
+    "qwen9b_output": "I made a few updates to the README. When you revise it, please don't overwrite existing content but instead add a section specifically for agents. Since some users might share this link directly with agents for deployment, include guidance on which parts they need to read and how to proceed with the deployment.",
+    "qwen9b_time": 1.676
+  },
+  {
+    "index": 17,
+    "raw_text": "可能是因为它设置的就是 Command 按键作为热键，那按 Command 加 C，自然确实也会触发。或者我们能改成，如果是 Command 的话，是在松开的时候再触发吗？这样子的话，如果松开的时候包含其他按键组合就不触发，可能可以解决这个问题",
+    "char_count": 122,
+    "prompt": "polish",
+    "doubao_output": "这应该是因为它本身就设置了Command按键作为热键，所以按Command+C自然也会触发热键。能不能改成让Command组合键在按键松开时再触发？这样一来，如果松开按键时已经伴随其他按键组合，就不会触发这个热键，应该就能解决这个问题。",
+    "doubao_time": 1.49,
+    "qwen9b_output": "可能的原因是系统将 Command 键设定为热键，因此按下 Command 加 C 时会自动触发。我们可以尝试调整触发逻辑：改为在松开 Command 键时才触发。这样，若松开时涉及其他按键组合则不会生效，从而解决该问题。",
+    "qwen9b_time": 1.59
+  },
+  {
+    "index": 17,
+    "raw_text": "可能是因为它设置的就是 Command 按键作为热键，那按 Command 加 C，自然确实也会触发。或者我们能改成，如果是 Command 的话，是在松开的时候再触发吗？这样子的话，如果松开的时候包含其他按键组合就不触发，可能可以解决这个问题",
+    "char_count": 122,
+    "prompt": "translate",
+    "doubao_output": "Probably because it's set to use the Command key as the hotkey, so pressing Command + C will naturally trigger it. Could we change the trigger condition to only activate when the Command key is released? That way, if other key combinations are involved when the key is released, it won't trigger, which might solve this problem.",
+    "doubao_time": 1.706,
+    "qwen9b_output": "It might be because Command is set as the hotkey, so pressing Command + C naturally triggers it. Alternatively, could we change it so that the action only triggers upon releasing the Command key? That way, if the release involves other key combinations, the trigger won't fire, which might solve the issue.",
+    "qwen9b_time": 1.729
+  },
+  {
+    "index": 18,
+    "raw_text": "可以把这些改动发上去，然后更新一下版本号。另外，我们其实每次改动都，发版本都需要有一系列的流程，包括 Update Jason，还有打包 DMG，还有 Homebrew 的那个更新，还有 Readme 里面的 DMG 文件下载链接的更新，这个怎么形成一个固化的流程，让你每次都记得，不要我每次都说啊？",
+    "char_count": 150,
+    "prompt": "polish",
+    "doubao_output": "可以把这些改动提交上去，然后更新版本号。另外，我们每次发版本都需要走一系列固定流程，包括更新JSON、打包DMG、更新Homebrew，以及更新Readme里的DMG文件下载链接，怎么把这些步骤整理成固化的流程，保证每次操作都不会遗漏，不用我每次再重新提醒？",
+    "doubao_time": 2.416,
+    "qwen9b_output": "1. 请先提交上述改动并更新版本号。\n2. 针对每次更新需执行的完整流程——包括更新 Jason、打包 DMG、更新 Homebrew 以及同步 Readme 中的 DMG 下载链接——建议将其固化为标准操作规范。\n3. 请确保后续能独立执行该流程，无需每次重复提醒。",
+    "qwen9b_time": 1.951
+  },
+  {
+    "index": 18,
+    "raw_text": "可以把这些改动发上去，然后更新一下版本号。另外，我们其实每次改动都，发版本都需要有一系列的流程，包括 Update Jason，还有打包 DMG，还有 Homebrew 的那个更新，还有 Readme 里面的 DMG 文件下载链接的更新，这个怎么形成一个固化的流程，让你每次都记得，不要我每次都说啊？",
+    "char_count": 150,
+    "prompt": "translate",
+    "doubao_output": "You can push these changes and then update the version number. Besides, every time we make changes and release a new version, there are a whole set of procedures we need to go through: updating the JSON, building the DMG, updating the Homebrew formula, and updating the DMG download link in the Readme. How can we turn this into a fixed workflow so that you remember all the steps every time without me having to remind you over and over again?",
+    "doubao_time": 1.884,
+    "qwen9b_output": "Please push these changes and update the version number. Actually, every modification requires a full release workflow: updating Jason, building the DMG, publishing the Homebrew formula, and refreshing the DMG download link in the README. How can we establish a standardized, automated pipeline for this so it's always handled correctly without needing a reminder each time?",
+    "qwen9b_time": 2.914
+  },
+  {
+    "index": 19,
+    "raw_text": "你的意思是说 你没有接大模型，就是直接用语音识别的。结果，对吧？然后你不想要句号，但这个做不了。它那个接口只支持有标点和没有标点，要么全都有，要么全都没有，不能单独去掉句号。不然你要么自己写个 prompt。",
+    "char_count": 104,
+    "prompt": "polish",
+    "doubao_output": "你的意思是你没有接入大模型，就是直接用语音识别输出结果，对吗？另外你不想要句号，但这个需求没法实现，因为接口只支持两种模式：要么全部保留标点，要么全部去掉标点，没办法单独去掉句号。如果一定要实现这个效果，你只能自己写prompt来调整。",
+    "doubao_time": 1.407,
+    "qwen9b_output": "1. 您的意思是，当前未接入大模型，直接使用了语音识别技术，对吗？\n2. 关于您不希望在结果中保留句号的需求，目前无法实现。\n3. 由于该接口仅支持“全有”或“全无”的标点模式，无法单独去除句号。\n4. 若需解决此问题，建议自行编写提示词（prompt）进行处理。",
+    "qwen9b_time": 3.134
+  },
+  {
+    "index": 19,
+    "raw_text": "你的意思是说 你没有接大模型，就是直接用语音识别的。结果，对吧？然后你不想要句号，但这个做不了。它那个接口只支持有标点和没有标点，要么全都有，要么全都没有，不能单独去掉句号。不然你要么自己写个 prompt。",
+    "char_count": 104,
+    "prompt": "translate",
+    "doubao_output": "So what you're saying is you aren't using a large language model, and the output comes directly from speech recognition, right? And you don't want periods in the output, but that can't be done. The API only supports two options: with all punctuation or without any punctuation. It doesn't allow removing only periods. Alternatively, you can write a custom prompt yourself.",
+    "doubao_time": 1.667,
+    "qwen9b_output": "So, you're saying you're not integrating with the large model but using speech recognition directly, correct? You don't want periods, but that's not feasible. The API only supports either all punctuation or none—it can't selectively remove just periods. You'll either have to handle it manually or write your own prompt.",
+    "qwen9b_time": 1.77
+  }
+]

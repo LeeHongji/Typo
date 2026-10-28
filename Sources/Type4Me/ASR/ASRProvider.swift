@@ -1,0 +1,151 @@
+import Foundation
+
+// MARK: - Provider Enum
+
+enum ASRProvider: String, CaseIterable, Codable, Sendable {
+    // Local
+    case sherpa
+    case apple
+    // International
+    case openai
+    case azure
+    case google
+    case aws
+    case deepgram
+    case cartesia
+    case assemblyai
+    case elevenlabs
+    case gemini
+    case grok
+    case groq
+    case mistral
+    case soniox
+    case metaMuse
+    // China
+    case volcano
+    case stepfun
+    case mimo
+    case aliyun
+    case bailian
+    case tencent
+    case iflytek
+    #if HAS_CLOUD_SUBSCRIPTION
+    // Cloud proxy (Type4Me Cloud subscription)
+    case cloud
+    #endif
+    // Fallback
+    case custom
+    // Deprecated
+    case baidu
+
+    var displayName: String {
+        switch self {
+        case .sherpa:   return L("SenseVoice 流式 + Qwen3 ASR 校准", "SenseVoice Streaming + Qwen3 ASR")
+        case .apple:    return L("Apple 语音识别", "Apple Speech")
+        case .openai:   return "OpenAI"
+        case .azure:    return "Microsoft Azure"
+        case .google:   return "Google Cloud STT"
+        case .aws:      return "AWS Transcribe"
+        case .deepgram: return "Deepgram"
+        case .cartesia: return "Cartesia"
+        case .assemblyai: return "AssemblyAI"
+        case .elevenlabs: return "ElevenLabs"
+        case .gemini:   return "Gemini"
+        case .grok:     return "Grok"
+        case .groq:     return "Groq"
+        case .mistral:  return "Mistral AI"
+        case .soniox:   return "Soniox"
+        case .metaMuse: return "Meta Muse"
+        case .volcano:  return L("火山引擎", "Volcengine")
+        case .stepfun:  return L("阶跃星辰", "StepFun")
+        case .mimo:     return L("小米 MiMo", "Xiaomi MiMo")
+        case .aliyun:   return L("阿里云", "Alibaba Cloud")
+        case .bailian:  return L("阿里云百炼", "Alibaba Cloud Bailian")
+        case .tencent:  return L("腾讯云", "Tencent Cloud")
+        case .baidu:    return L("百度智能云 (弃用)", "Baidu AI Cloud (Deprecated)")
+        case .iflytek:  return L("讯飞", "iFLYTEK")
+        #if HAS_CLOUD_SUBSCRIPTION
+        case .cloud:    return L("Type4Me Cloud", "Type4Me Cloud")
+        #endif
+        case .custom:   return L("自定义", "Custom")
+        }
+    }
+
+    /// Whether this provider runs entirely on-device (no network required).
+    var isLocal: Bool { self == .sherpa }
+
+    /// Whether this provider is deprecated and cannot be selected as default.
+    var isDeprecated: Bool { self == .baidu }
+}
+
+// MARK: - Credential Field Descriptor
+
+struct FieldOption: Sendable {
+    let value: String
+    let label: String
+}
+
+struct CredentialField: Sendable, Identifiable {
+    let key: String
+    let label: String
+    let placeholder: String
+    let isSecure: Bool
+    let isOptional: Bool
+    let defaultValue: String
+    /// When non-empty, the UI renders a Picker instead of a TextField.
+    let options: [FieldOption]
+    /// When true (and options is non-empty), the picker includes a "Custom" entry
+    /// that reveals a text field for free-form input.
+    let allowCustomInput: Bool
+    /// Recognition modes in which the field is shown and required. `nil` means every mode.
+    let visibleModes: Set<ASRRecognitionMode>?
+    /// Renders a multi-line editor (headers, JSON templates) instead of a single-line field.
+    let isMultiline: Bool
+    /// Short usage note shown under the field label.
+    let hint: String?
+
+    /// Sentinel value used in the picker to represent "custom input" mode.
+    static let customValue = "_custom"
+
+    var id: String { key }
+
+    init(key: String, label: String, placeholder: String, isSecure: Bool, isOptional: Bool, defaultValue: String, options: [FieldOption] = [], allowCustomInput: Bool = false, visibleModes: Set<ASRRecognitionMode>? = nil, isMultiline: Bool = false, hint: String? = nil) {
+        self.key = key
+        self.label = label
+        self.placeholder = placeholder
+        self.isSecure = isSecure
+        self.isOptional = isOptional
+        self.defaultValue = defaultValue
+        self.options = options
+        self.allowCustomInput = allowCustomInput
+        self.visibleModes = visibleModes
+        self.isMultiline = isMultiline
+        self.hint = hint
+    }
+
+    func isVisible(in mode: ASRRecognitionMode) -> Bool {
+        visibleModes?.contains(mode) ?? true
+    }
+}
+
+// MARK: - Provider Config Protocol
+
+protocol ASRProviderConfig: Sendable {
+    static var provider: ASRProvider { get }
+    static var displayName: String { get }
+    static var credentialFields: [CredentialField] { get }
+
+    init?(credentials: [String: String])
+    func toCredentials() -> [String: String]
+    var isValid: Bool { get }
+
+    /// Fields shown (and required when non-optional) for the given draft values.
+    static func displayedCredentialFields(for values: [String: String]) -> [CredentialField]
+}
+
+extension ASRProviderConfig {
+    static func displayedCredentialFields(for values: [String: String]) -> [CredentialField] {
+        let mode = ASRRecognitionMode(credentials: values)
+        return credentialFields.filter { $0.isVisible(in: mode) }
+    }
+}

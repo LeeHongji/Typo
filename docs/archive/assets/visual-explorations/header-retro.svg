@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 280" width="840" height="280">
+  <defs>
+    <style>
+      @keyframes blink {
+        0%, 49% { opacity: 1; }
+        50%, 100% { opacity: 0; }
+      }
+      @keyframes glow-text {
+        0%, 100% { filter: drop-shadow(0 0 4px rgba(74,222,128,0.3)); }
+        50% { filter: drop-shadow(0 0 8px rgba(74,222,128,0.6)); }
+      }
+      @keyframes scanline {
+        0% { transform: translateY(-280px); }
+        100% { transform: translateY(280px); }
+      }
+      .bg { fill: #0D0F0A; }
+      .frame { fill: none; stroke: #2D7A4A; stroke-width: 1; }
+      .titlebar-bg { fill: #151912; }
+      .dot-red { fill: #EF4444; }
+      .dot-yellow { fill: #FBBF24; }
+      .dot-green { fill: #4ADE80; }
+      .titlebar-text { fill: #2D7A4A; font-family: 'Courier New', Courier, monospace; font-size: 11px; letter-spacing: 0.5px; }
+      .ascii { fill: #86EFAC; font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: bold; animation: glow-text 3s ease-in-out infinite; }
+      .version { fill: #2D7A4A; font-family: 'Courier New', Courier, monospace; font-size: 12px; }
+      .prompt { fill: #2D7A4A; font-family: 'Courier New', Courier, monospace; font-size: 14px; }
+      .prompt-text { fill: #4ADE80; font-family: 'Courier New', Courier, monospace; font-size: 14px; }
+      .cursor { fill: #4ADE80; animation: blink 1s step-end infinite; }
+      .accent { fill: #FBBF24; font-family: 'Courier New', Courier, monospace; font-size: 12px; font-weight: bold; letter-spacing: 1px; }
+      .info { fill: #2D7A4A; font-family: 'Courier New', Courier, monospace; font-size: 12px; }
+      .info-val { fill: #4ADE80; font-family: 'Courier New', Courier, monospace; font-size: 12px; }
+      .divider-line { fill: #2D7A4A; font-family: 'Courier New', Courier, monospace; font-size: 11px; opacity: 0.4; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" width="840" height="280" rx="8"/>
+
+  <!-- Terminal frame -->
+  <rect class="frame" x="10" y="10" width="820" height="260" rx="6"/>
+
+  <!-- Title bar -->
+  <rect class="titlebar-bg" x="11" y="11" width="818" height="28" rx="5"/>
+  <circle class="dot-red" cx="28" cy="25" r="5"/>
+  <circle class="dot-yellow" cx="44" cy="25" r="5"/>
+  <circle class="dot-green" cx="60" cy="25" r="5"/>
+  <text class="titlebar-text" x="420" y="29" text-anchor="middle">type4me -- Terminal</text>
+
+  <!-- Terminal body -->
+  <!-- ASCII logo -->
+  <text class="ascii" x="40" y="72"> _____ _  _ ___  ____  _  _  __  __ ____</text>
+  <text class="ascii" x="40" y="88">|_   _| || | _ \| ___|| || |/  \/  | ___|</text>
+  <text class="ascii" x="40" y="104">  | | | \| |  _/| _|  |_  _| |\/| | _|</text>
+  <text class="ascii" x="40" y="120">  |_| |_|\__|_|  |____| |_||_|  |_|____|</text>
+
+  <text class="version" x="40" y="145">v1.6.0 // macOS voice input tool</text>
+
+  <!-- Divider -->
+  <text class="divider-line" x="40" y="165">- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -</text>
+
+  <!-- Command prompt -->
+  <text class="prompt" x="40" y="190">$</text>
+  <text class="prompt-text" x="55" y="190">type4me --info</text>
+
+  <!-- Feature badges as terminal output -->
+  <text class="accent" x="40" y="215">ENGINES:</text>
+  <text class="info-val" x="120" y="215">local(SenseVoice+Qwen3)</text>
+  <text class="info" x="350" y="215">+</text>
+  <text class="info-val" x="365" y="215">cloud(7 providers)</text>
+
+  <text class="accent" x="40" y="235">STATUS:</text>
+  <text class="info-val" x="120" y="235">free, open-source, offline-ready</text>
+
+  <!-- Cursor at bottom -->
+  <text class="prompt" x="40" y="258">$</text>
+  <rect class="cursor" x="55" y="247" width="8" height="14" rx="1"/>
+
+  <!-- Right side: features column -->
+  <text class="accent" x="560" y="190">FEATURES:</text>
+  <text class="info" x="560" y="210">[</text>
+  <text class="info-val" x="570" y="210">streaming ASR</text>
+  <text class="info" x="560" y="226">[</text>
+  <text class="info-val" x="570" y="226">LLM processing</text>
+  <text class="info" x="560" y="242">[</text>
+  <text class="info-val" x="570" y="242">vocab management</text>
+  <text class="info" x="560" y="258">[</text>
+  <text class="info-val" x="570" y="258">history export</text>
+  <text class="info" x="700" y="210">]</text>
+  <text class="info" x="700" y="226">]</text>
+  <text class="info" x="700" y="242">]</text>
+  <text class="info" x="700" y="258">]</text>
+</svg>

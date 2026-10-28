@@ -1,0 +1,10 @@
+{
+  "models": {
+    "product": {
+      "model": "deepseek-v4-flash",
+      "baseURL": "https://example.invalid/v1",
+      "apiKeyEnvironment": "INTELLISENSE_EVAL_API_KEY",
+      "thinkingMode": "none"
+    }
+  }
+}

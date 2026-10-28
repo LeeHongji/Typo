@@ -1,0 +1,50 @@
+name: Update Homebrew Tap
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release info
+        id: release
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download DMG and compute SHA256
+        id: sha
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          URL="https://github.com/joewongjc/type4me/releases/download/v${VERSION}/Type4Me-v${VERSION}-cloud.dmg"
+          echo "Downloading $URL"
+          curl -fSL -o type4me.dmg "$URL"
+          SHA=$(sha256sum type4me.dmg | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA"
+
+      - name: Update tap repo
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          SHA="${{ steps.sha.outputs.sha256 }}"
+
+          git clone https://x-access-token:${TAP_TOKEN}@github.com/joewongjc/homebrew-type4me.git tap
+          cd tap
+
+          # Update version, sha256, and URL in Cask file
+          sed -i "s/version \".*\"/version \"${VERSION}\"/" Casks/type4me.rb
+          sed -i "s/sha256 \".*\"/sha256 \"${SHA}\"/" Casks/type4me.rb
+          # Ensure URL uses cloud DMG naming
+          sed -i "s|Type4Me-v#{version}\.dmg|Type4Me-v#{version}-cloud.dmg|g" Casks/type4me.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/type4me.rb
+          git commit -m "bump: Type4Me v${VERSION}"
+          git push origin main

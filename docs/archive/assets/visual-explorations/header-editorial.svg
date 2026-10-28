@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 280" width="840" height="280">
+  <defs>
+    <style>
+      @keyframes underline-draw {
+        0% { stroke-dashoffset: 120; }
+        100% { stroke-dashoffset: 0; }
+      }
+      @keyframes fade-up {
+        0% { opacity: 0; transform: translateY(8px); }
+        100% { opacity: 1; transform: translateY(0); }
+      }
+      .bg { fill: #F5F0EB; }
+      .title { fill: #1C1917; font-family: Georgia, 'Playfair Display', 'Times New Roman', serif; font-weight: 700; font-size: 56px; letter-spacing: -1px; }
+      .title-italic { fill: #1C1917; font-family: Georgia, 'Playfair Display', 'Times New Roman', serif; font-weight: 400; font-style: italic; font-size: 56px; letter-spacing: -1px; }
+      .subtitle { fill: #A8A29E; font-family: -apple-system, BlinkMacSystemFont, 'Source Sans 3', sans-serif; font-weight: 300; font-size: 15px; line-height: 1.8; }
+      .accent-line { stroke: #B45309; stroke-width: 2; stroke-dasharray: 120; animation: underline-draw 2s ease-out forwards; }
+      .divider { stroke: #D6D3CD; stroke-width: 0.5; }
+      .section-num { fill: #A8A29E; font-family: Georgia, serif; font-style: italic; font-size: 13px; }
+      .tag { fill: #1C1917; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-weight: 500; font-size: 12px; letter-spacing: 1px; }
+      .tag-muted { fill: #A8A29E; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-weight: 300; font-size: 12px; }
+      .card-bg { fill: #EDE8E3; rx: 4; }
+      .card-title { fill: #1C1917; font-family: Georgia, serif; font-weight: 400; font-size: 14px; }
+      .card-desc { fill: #A8A29E; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-weight: 300; font-size: 11.5px; }
+      .amber-dot { fill: #B45309; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" width="840" height="280" rx="6"/>
+
+  <!-- Top rule -->
+  <line class="divider" x1="48" y1="40" x2="792" y2="40"/>
+
+  <!-- Header row -->
+  <text class="section-num" x="48" y="32">macOS 语音输入法</text>
+  <text class="tag-muted" x="792" y="32" text-anchor="end">Free &amp; Open Source</text>
+
+  <!-- Main title area -->
+  <text class="title" x="48" y="110">Type</text>
+  <text class="title-italic" x="182" y="110">4</text>
+  <text class="title" x="210" y="110">Me</text>
+
+  <!-- Accent underline -->
+  <line class="accent-line" x1="48" y1="118" x2="290" y2="118"/>
+
+  <!-- Subtitle -->
+  <text class="subtitle" x="48" y="148">边说边出字，说完无需等待</text>
+  <text class="subtitle" x="48" y="168">本地识别媲美云端，支持 Ollama 本地模型</text>
+
+  <!-- Vertical rule -->
+  <line class="divider" x1="380" y1="60" x2="380" y2="240"/>
+
+  <!-- Right side: feature cards -->
+  <g transform="translate(410, 60)">
+    <!-- Card 1 -->
+    <rect class="card-bg" x="0" y="0" width="185" height="70" rx="4"/>
+    <circle class="amber-dot" cx="16" cy="18" r="4"/>
+    <text class="card-title" x="28" y="22">语音识别</text>
+    <text class="card-desc" x="16" y="42">本地引擎 + 7 家云端厂商</text>
+    <text class="card-desc" x="16" y="56">流式识别，边说边出字</text>
+
+    <!-- Card 2 -->
+    <rect class="card-bg" x="195" y="0" width="185" height="70" rx="4"/>
+    <circle class="amber-dot" cx="211" cy="18" r="4"/>
+    <text class="card-title" x="223" y="22">文本处理</text>
+    <text class="card-desc" x="211" y="42">润色 / 翻译 / 自定义 Prompt</text>
+    <text class="card-desc" x="211" y="56">改人设、改语气、小语种翻译</text>
+
+    <!-- Card 3 -->
+    <rect class="card-bg" x="0" y="80" width="185" height="70" rx="4"/>
+    <circle class="amber-dot" cx="16" cy="98" r="4"/>
+    <text class="card-title" x="28" y="102">词汇管理</text>
+    <text class="card-desc" x="16" y="122">热词校正 + 映射替换</text>
+    <text class="card-desc" x="16" y="136">配套 Skill 自动纠错</text>
+
+    <!-- Card 4 -->
+    <rect class="card-bg" x="195" y="80" width="185" height="70" rx="4"/>
+    <circle class="amber-dot" cx="211" cy="98" r="4"/>
+    <text class="card-title" x="223" y="102">历史记录</text>
+    <text class="card-desc" x="211" y="122">原始 + 处理后文本全保存</text>
+    <text class="card-desc" x="211" y="136">全文搜索 / CSV 导出</text>
+  </g>
+
+  <!-- Bottom rule -->
+  <line class="divider" x1="48" y1="250" x2="792" y2="250"/>
+  <text class="tag" x="48" y="268">macOS 14+ (Sonoma)</text>
+  <text class="tag-muted" x="792" y="268" text-anchor="end">SenseVoice + Qwen3 + 7 Cloud Providers</text>
+</svg>

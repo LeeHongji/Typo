@@ -1,0 +1,546 @@
+import AudioToolbox
+@preconcurrency import AVFoundation
+import CoreAudio
+import Foundation
+
+enum AudioInputDeviceCategory: String, CaseIterable, Codable, Equatable {
+    case bluetooth
+    case builtIn
+    case external
+    case virtual
+    case other
+
+    var displayName: String {
+        switch self {
+        case .bluetooth:
+            return L("蓝牙设备", "Bluetooth")
+        case .builtIn:
+            return L("内置麦克风", "Built-in")
+        case .external:
+            return L("外接/USB", "External/USB")
+        case .virtual:
+            return L("虚拟设备", "Virtual")
+        case .other:
+            return L("其他设备", "Other")
+        }
+    }
+}
+
+struct AudioInputDevice: Identifiable, Equatable {
+    var id: String { uid }
+    let uid: String
+    let name: String
+    let category: AudioInputDeviceCategory
+}
+
+enum AudioInputDevicePreferenceMode: String {
+    case systemDefault
+    case priority
+}
+
+enum AudioInputCaptureResolution: Equatable {
+    case explicitDevice(uid: String)
+    case systemDefault
+}
+
+struct AudioInputDevicePreferenceEntry: Codable, Equatable, Identifiable {
+    var id: String { uid }
+    let uid: String
+    let name: String
+}
+
+enum AudioInputDevicePreferenceStore {
+    static let modeKey = "tf_microphonePreferenceMode"
+    static let priorityEntriesKey = "tf_microphonePriorityEntries"
+
+    static let selectedUIDKey = "tf_selectedMicrophoneUID"
+    static let backupUIDKey = "tf_backupMicrophoneUID"
+    private static let obsoleteSelectionModeKey = "tf_microphoneSelectionMode"
+    private static let obsoletePriorityOrderKey = "tf_microphonePriorityOrder"
+
+    static func migrateIfNeeded() {
+        if UserDefaults.standard.object(forKey: modeKey) == nil {
+            let storedEntries = priorityEntries(from: UserDefaults.standard.string(forKey: priorityEntriesKey))
+            if !storedEntries.isEmpty {
+                UserDefaults.standard.set(AudioInputDevicePreferenceMode.priority.rawValue, forKey: modeKey)
+            } else {
+                let legacyEntries = [
+                    legacyEntry(forKey: selectedUIDKey),
+                    legacyEntry(forKey: backupUIDKey),
+                ].compactMap { $0 }
+
+                if legacyEntries.isEmpty {
+                    UserDefaults.standard.set(AudioInputDevicePreferenceMode.systemDefault.rawValue, forKey: modeKey)
+                } else {
+                    savePriorityEntries(legacyEntries)
+                }
+            }
+        }
+
+        UserDefaults.standard.removeObject(forKey: selectedUIDKey)
+        UserDefaults.standard.removeObject(forKey: backupUIDKey)
+        UserDefaults.standard.removeObject(forKey: obsoleteSelectionModeKey)
+        UserDefaults.standard.removeObject(forKey: obsoletePriorityOrderKey)
+    }
+
+    static func resolvedDeviceUID(devices: [AudioInputDevice] = AudioInputDeviceDiscovery.availableInputDevices()) -> String? {
+        resolvedDevice(devices: devices)?.uid
+    }
+
+    static func resolvedCachedDeviceUID() -> String? {
+        let devices = cachedDevicesOrRefresh()
+        return resolvedDevice(devices: devices)?.uid
+    }
+
+    /// Resolves the input policy used for capture. In priority mode, the first
+    /// available priority device wins; otherwise the priority list ends with
+    /// "follow system", so the system default (Bluetooth included) is used.
+    static func captureResolution(
+        devices: [AudioInputDevice],
+        systemDefault: AudioInputDevice?
+    ) -> AudioInputCaptureResolution {
+        guard mode() == .priority else { return .systemDefault }
+        if let device = resolvedDevice(devices: devices) {
+            return .explicitDevice(uid: device.uid)
+        }
+        return .systemDefault
+    }
+
+    static func cachedCaptureResolution() -> AudioInputCaptureResolution {
+        var snapshot = AudioInputDeviceMonitor.shared.currentSnapshot()
+        if snapshot.devices.isEmpty {
+            AudioInputDeviceMonitor.shared.refreshSynchronously()
+            snapshot = AudioInputDeviceMonitor.shared.currentSnapshot()
+        }
+        return captureResolution(
+            devices: snapshot.devices,
+            systemDefault: snapshot.systemDefaultInput
+        )
+    }
+
+    static func mode() -> AudioInputDevicePreferenceMode {
+        migrateIfNeeded()
+        let rawValue = UserDefaults.standard.string(forKey: modeKey)
+        return rawValue.flatMap(AudioInputDevicePreferenceMode.init(rawValue:)) ?? .systemDefault
+    }
+
+    static func priorityEntries() -> [AudioInputDevicePreferenceEntry] {
+        migrateIfNeeded()
+        return priorityEntries(from: UserDefaults.standard.string(forKey: priorityEntriesKey))
+    }
+
+    static func priorityEntries(from rawValue: String?) -> [AudioInputDevicePreferenceEntry] {
+        guard let rawValue, !rawValue.isEmpty else { return [] }
+        if let data = rawValue.data(using: .utf8),
+           let entries = try? JSONDecoder().decode([AudioInputDevicePreferenceEntry].self, from: data) {
+            return normalizedEntries(entries)
+        }
+
+        let legacyEntries = rawValue
+            .split(separator: ",")
+            .map { String($0) }
+            .filter { !$0.isEmpty }
+            .map { AudioInputDevicePreferenceEntry(uid: $0, name: $0) }
+        return normalizedEntries(legacyEntries)
+    }
+
+    static func storageValue(for entries: [AudioInputDevicePreferenceEntry]) -> String {
+        let normalized = normalizedEntries(entries)
+        guard let data = try? JSONEncoder().encode(normalized) else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    static func savePriorityEntries(_ entries: [AudioInputDevicePreferenceEntry]) {
+        let normalized = normalizedEntries(entries)
+        guard !normalized.isEmpty else {
+            resetToSystemDefault(clearPriority: true)
+            return
+        }
+        UserDefaults.standard.set(AudioInputDevicePreferenceMode.priority.rawValue, forKey: modeKey)
+        UserDefaults.standard.set(storageValue(for: normalized), forKey: priorityEntriesKey)
+        NotificationCenter.default.post(name: .audioInputDevicePreferenceDidChange, object: nil)
+    }
+
+    static func resetToSystemDefault(clearPriority: Bool = false) {
+        UserDefaults.standard.set(AudioInputDevicePreferenceMode.systemDefault.rawValue, forKey: modeKey)
+        if clearPriority {
+            UserDefaults.standard.removeObject(forKey: priorityEntriesKey)
+        }
+        NotificationCenter.default.post(name: .audioInputDevicePreferenceDidChange, object: nil)
+    }
+
+    static func resolvedDevice(devices: [AudioInputDevice]) -> AudioInputDevice? {
+        guard mode() == .priority else {
+            return nil
+        }
+        return resolvedDevice(devices: devices, priorityEntries: priorityEntries())
+    }
+
+    static func resolvedDevice(
+        devices: [AudioInputDevice],
+        priorityEntries: [AudioInputDevicePreferenceEntry]
+    ) -> AudioInputDevice? {
+        for entry in normalizedEntries(priorityEntries) {
+            if let device = devices.first(where: { $0.uid == entry.uid }) {
+                return device
+            }
+        }
+        return nil
+    }
+
+    /// The device Type4Me will use for the next recording: the first available
+    /// priority device, otherwise the system default.
+    static func activeInputDevice(
+        devices: [AudioInputDevice],
+        systemDefault: AudioInputDevice?
+    ) -> AudioInputDevice? {
+        resolvedDevice(devices: devices) ?? systemDefault
+    }
+
+    /// Keep-alive is only useful for an actively selected Bluetooth microphone.
+    /// In priority mode, falling back to a system-default Bluetooth input is fine
+    /// for a recording, but keeping it open would pin the headset in call mode.
+    static func keepAliveInputDevice(
+        devices: [AudioInputDevice],
+        systemDefault: AudioInputDevice?
+    ) -> AudioInputDevice? {
+        let active = mode() == .priority ? resolvedDevice(devices: devices) : systemDefault
+        return active?.category == .bluetooth ? active : nil
+    }
+
+    static func cachedKeepAliveInputDevice() -> AudioInputDevice? {
+        var snapshot = AudioInputDeviceMonitor.shared.currentSnapshot()
+        if snapshot.devices.isEmpty {
+            AudioInputDeviceMonitor.shared.refreshSynchronously()
+            snapshot = AudioInputDeviceMonitor.shared.currentSnapshot()
+        }
+        return keepAliveInputDevice(
+            devices: snapshot.devices,
+            systemDefault: snapshot.systemDefaultInput
+        )
+    }
+
+    static func activeCachedInputDevice() -> AudioInputDevice? {
+        let snapshot = AudioInputDeviceMonitor.shared.currentSnapshot()
+        return activeInputDevice(
+            devices: snapshot.devices,
+            systemDefault: snapshot.systemDefaultInput
+        )
+    }
+
+    private static func cachedDevicesOrRefresh() -> [AudioInputDevice] {
+        let cached = AudioInputDeviceMonitor.shared.currentDevices()
+        if !cached.isEmpty {
+            return cached
+        }
+        return AudioInputDeviceMonitor.shared.refreshSynchronously()
+    }
+
+    private static func legacyEntry(forKey key: String) -> AudioInputDevicePreferenceEntry? {
+        guard let uid = UserDefaults.standard.string(forKey: key), !uid.isEmpty else {
+            return nil
+        }
+        return AudioInputDevicePreferenceEntry(uid: uid, name: uid)
+    }
+
+    private static func normalizedEntries(_ entries: [AudioInputDevicePreferenceEntry]) -> [AudioInputDevicePreferenceEntry] {
+        var seen = Set<String>()
+        var result: [AudioInputDevicePreferenceEntry] = []
+        for entry in entries {
+            let uid = entry.uid.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !uid.isEmpty, !seen.contains(uid) else { continue }
+            seen.insert(uid)
+            let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            result.append(AudioInputDevicePreferenceEntry(uid: uid, name: name.isEmpty ? uid : name))
+        }
+        return result
+    }
+}
+
+enum AudioInputDeviceDiscovery {
+    static func availableInputDevices() -> [AudioInputDevice] {
+        let discoverySession = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        return discoverySession.devices.map {
+            AudioInputDevice(
+                uid: $0.uniqueID,
+                name: $0.localizedName,
+                category: category(for: $0)
+            )
+        }
+    }
+
+    /// Resolves the actual system default input from CoreAudio rather than
+    /// inferring it from the list of available capture devices.
+    static func systemDefaultInputDevice() -> AudioInputDevice? {
+        guard let deviceID = defaultInputDeviceID(),
+              let uid = deviceUID(deviceID),
+              let name = deviceName(deviceID)
+        else { return nil }
+        return AudioInputDevice(
+            uid: uid,
+            name: name,
+            category: category(
+                forName: name,
+                uid: uid,
+                transportType: transportType(device: deviceID)
+            )
+        )
+    }
+
+    static func category(for device: AVCaptureDevice) -> AudioInputDeviceCategory {
+        let transport = coreAudioDeviceID(forUID: device.uniqueID).map { transportType(device: $0) }
+        return category(forName: device.localizedName, uid: device.uniqueID, transportType: transport)
+    }
+
+    static func category(forName deviceName: String, uid: String, transportType: UInt32?) -> AudioInputDeviceCategory {
+        let name = deviceName.lowercased()
+        if name.contains("airpods") || name.contains("bluetooth") || name.contains("蓝牙") {
+            return .bluetooth
+        }
+
+        switch transportType {
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
+            return .bluetooth
+        case kAudioDeviceTransportTypeBuiltIn:
+            return .builtIn
+        case kAudioDeviceTransportTypeVirtual, kAudioDeviceTransportTypeAggregate:
+            return .virtual
+        case kAudioDeviceTransportTypeUSB, kAudioDeviceTransportTypePCI, kAudioDeviceTransportTypeFireWire:
+            return .external
+        case .some:
+            return .other
+        case .none:
+            if uid == "BuiltInMicrophoneDevice" || name.contains("macbook") || name.contains("内置") {
+                return .builtIn
+            }
+            return .external
+        }
+    }
+
+    static func coreAudioDeviceID(forUID uid: String) -> AudioDeviceID? {
+        var size: UInt32 = 0
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size
+        ) == noErr else {
+            return nil
+        }
+
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var deviceIDs = Array(repeating: AudioDeviceID(0), count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size,
+            &deviceIDs
+        ) == noErr else {
+            return nil
+        }
+
+        return deviceIDs.first { deviceUID($0) == uid }
+    }
+
+    private static func deviceUID(_ deviceID: AudioDeviceID) -> String? {
+        var uid = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = withUnsafeMutablePointer(to: &uid) { pointer in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, pointer)
+        }
+        guard status == noErr else { return nil }
+        return uid as String
+    }
+
+    private static func defaultInputDeviceID() -> AudioDeviceID? {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &size,
+            &deviceID
+        )
+        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+        return deviceID
+    }
+
+    private static func deviceName(_ deviceID: AudioDeviceID) -> String? {
+        var name = "" as CFString
+        var size = UInt32(MemoryLayout<CFString>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = withUnsafeMutablePointer(to: &name) { pointer in
+            AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, pointer)
+        }
+        guard status == noErr else { return nil }
+        return name as String
+    }
+
+    private static func transportType(device: AudioDeviceID) -> UInt32 {
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport)
+        guard status == noErr else { return 0 }
+        return transport
+    }
+
+    static func aggregateContainsBluetooth(uid: String) -> Bool {
+        guard let aggregateID = coreAudioDeviceID(forUID: uid) else {
+            return true // Fallback: conservative assumption
+        }
+        var size: UInt32 = 0
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioAggregateDevicePropertyActiveSubDeviceList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        guard AudioObjectGetPropertyDataSize(aggregateID, &address, 0, nil, &size) == noErr, size > 0 else {
+            return true // Fail safe: assume contains bluetooth
+        }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        guard count > 0 else { return false }
+        var subDeviceIDs = Array(repeating: AudioDeviceID(0), count: count)
+        guard AudioObjectGetPropertyData(aggregateID, &address, 0, nil, &size, &subDeviceIDs) == noErr else {
+            return true
+        }
+        for subID in subDeviceIDs {
+            let transport = transportType(device: subID)
+            if transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE {
+                return true
+            }
+            if let subName = deviceName(subID) {
+                let lower = subName.lowercased()
+                if lower.contains("airpods") || lower.contains("bluetooth") || lower.contains("蓝牙") {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+}
+
+extension Notification.Name {
+    static let audioInputDevicesDidChange = Notification.Name("Type4MeAudioInputDevicesDidChange")
+    static let audioInputDevicePreferenceDidChange = Notification.Name(
+        "Type4MeAudioInputDevicePreferenceDidChange"
+    )
+}
+
+final class AudioInputDeviceMonitor {
+    static let shared = AudioInputDeviceMonitor()
+
+    private let queue = DispatchQueue(label: "com.type4me.audio.input-devices", qos: .utility)
+    private let lock = NSLock()
+    private var started = false
+    private var cachedDevices: [AudioInputDevice] = []
+    private var cachedSystemDefaultInput: AudioInputDevice?
+
+    struct Snapshot {
+        let devices: [AudioInputDevice]
+        let systemDefaultInput: AudioInputDevice?
+    }
+
+    private init() {}
+
+    func start() {
+        guard !started else { return }
+        started = true
+        refreshSynchronously()
+        addListener(selector: kAudioHardwarePropertyDevices)
+        addListener(selector: kAudioHardwarePropertyDefaultInputDevice)
+    }
+
+    func currentDevices() -> [AudioInputDevice] {
+        currentSnapshot().devices
+    }
+
+    func currentSnapshot() -> Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return Snapshot(
+            devices: cachedDevices,
+            systemDefaultInput: cachedSystemDefaultInput
+        )
+    }
+
+    func replaceCachedDevices(
+        _ devices: [AudioInputDevice],
+        systemDefaultInput: AudioInputDevice?
+    ) {
+        lock.lock()
+        cachedDevices = devices
+        cachedSystemDefaultInput = systemDefaultInput
+        lock.unlock()
+    }
+
+    func replaceCachedDevices(_ devices: [AudioInputDevice]) {
+        lock.lock()
+        cachedDevices = devices
+        lock.unlock()
+    }
+
+    private func addListener(selector: AudioObjectPropertySelector) {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            queue
+        ) { _, _ in
+            self.refreshAsynchronously()
+        }
+    }
+
+    @discardableResult
+    func refreshSynchronously() -> [AudioInputDevice] {
+        let devices = AudioInputDeviceDiscovery.availableInputDevices()
+        let systemDefaultInput = AudioInputDeviceDiscovery.systemDefaultInputDevice()
+        replaceCachedDevices(devices, systemDefaultInput: systemDefaultInput)
+        return devices
+    }
+
+    private func refreshAsynchronously() {
+        let devices = AudioInputDeviceDiscovery.availableInputDevices()
+        let systemDefaultInput = AudioInputDeviceDiscovery.systemDefaultInputDevice()
+        replaceCachedDevices(devices, systemDefaultInput: systemDefaultInput)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .audioInputDevicesDidChange, object: nil)
+        }
+    }
+}
