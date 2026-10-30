@@ -156,6 +156,8 @@ final class FloatingBarController {
     var dragLifecycle = FloatingBarDragLifecycle()
     private var isSelfOriginatedPlacementChange = false
     private var guideWindow: FloatingBarPlacementGuideWindow?
+    /// Performs recording phases in place of the bar when the Typo companion is on.
+    private lazy var typo = TypoCompanionController(state: state)
 
     private struct DragSession {
         var grabOffset: CGVector
@@ -254,6 +256,11 @@ final class FloatingBarController {
 
     func show() {
         guard !isSuppressedForManualInput else { return }
+        if typo.takeShowRequest() {
+            panel.ignoresMouseEvents = true
+            panel.orderOut(nil)
+            return
+        }
         let wasHiding = isHiding
         isHiding = false
         _ = dragLifecycle.showRequested()
@@ -312,6 +319,7 @@ final class FloatingBarController {
     }
 
     func hide(style: FloatingBarHideStyle = .standard) {
+        typo.handleHide(style: style)
         let action = dragLifecycle.hideRequested()
         chrome.isRetainedForDrag = dragLifecycle.isRetainedForDrag
         if action == .retainForDrag {

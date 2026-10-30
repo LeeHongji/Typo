@@ -40,6 +40,8 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
 
     @AppStorage(RecordingIndicatorStyle.storageKey)
     private var indicatorStyle = RecordingIndicatorStyle.defaultValue
+    @AppStorage(TypoCompanionSettings.enabledKey)
+    private var typoCompanionEnabled = false
 
     @AppStorage(RecordingVisualStyle.storageKey)
     private var visualStyle = RecordingVisualStyle.defaultValue
@@ -289,6 +291,8 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
 
                 SettingsDivider()
                 indicatorPositionRow
+                SettingsDivider()
+                typoCompanionRow
             }
             .animation(TF.springGentle, value: isCompact)
             .animation(TF.springGentle, value: value(\.showsTooltips))
@@ -659,6 +663,17 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
             ),
             isEnabled: value(\.showsTooltips),
             isIndented: true
+        )
+    }
+
+    private var typoCompanionRow: some View {
+        settingsToggleRow(
+            L("Typo 小键帽", "Typo Keycap"),
+            subtitle: L(
+                "开启后，录音、识别和输出时由小键帽 Typo 代替录音条做出反应；提示和报错仍显示在录音条上。",
+                "Typo the keycap reacts while you record, while text is processed, and when it lands, in place of the recording bar. Notices and errors still use the bar."
+            ),
+            isOn: $typoCompanionEnabled
         )
     }
 
