@@ -3,25 +3,33 @@ import Foundation
 
 /// Typo's performance for one dictation, as a pure function of events and time.
 ///
-/// The companion window feeds it phase changes, the microphone level and a clock;
-/// it answers with the pose to draw. Keeping it free of AppKit and timers makes
-/// every transition reproducible in tests.
+/// Typo peeks over the top edge of the recording bar's capsule. `Pose.sink`
+/// says how much of it is hidden behind that edge: 0 stands fully out, 1 is
+/// fully hidden. The bar feeds events and a clock; the performance answers with
+/// the pose to draw, so every transition is reproducible in tests.
 struct TypoPerformance: Equatable {
     enum Stage: Equatable {
         case hidden
-        /// Rising out of the baseline.
+        /// Rising from behind the capsule.
         case entering
         case listening
         case thinking
+        /// Holding a face while the bar shows a completion or error message.
+        case reacting(Reaction)
         case exiting(Exit)
     }
 
+    enum Reaction: Equatable {
+        case done
+        case failed
+    }
+
     enum Exit: Equatable {
-        /// Text landed: hop, press down like a key, spring back, sink.
+        /// Text landed: a small hop, a key-like press, then down behind the bar.
         case success
         /// The user cancelled: a sad sink.
         case cancelled
-        /// Output did not land or an error is shown: a startled sink.
+        /// The bar is leaving after an error: a startled sink.
         case failed
     }
 
@@ -29,21 +37,29 @@ struct TypoPerformance: Equatable {
         var enter: TimeInterval = 0.36
         var loudHold: TimeInterval = 0.3
         var loudRelease: TimeInterval = 0.25
+        /// How long Typo takes to stand fully out when bristling, and to settle back.
+        var loudRise: TimeInterval = 0.15
         var quietBubble: TimeInterval = 2.0
         var blinkPeriod: TimeInterval = 3.4
         var blinkLength: TimeInterval = 0.12
-        var successHop: TimeInterval = 0.22
-        var successLand: TimeInterval = 0.14
-        var successRebound: TimeInterval = 0.16
-        var successSink: TimeInterval = 0.22
-        var cancelSink: TimeInterval = 0.3
-        var failHold: TimeInterval = 0.3
-        var failSink: TimeInterval = 0.22
+        // The success exit fits inside the bar's 0.3 s exit collapse.
+        var successHop: TimeInterval = 0.08
+        var successPress: TimeInterval = 0.1
+        var successSink: TimeInterval = 0.14
+        var cancelSink: TimeInterval = 0.28
+        var failSink: TimeInterval = 0.24
         var reducedMotionFade: TimeInterval = 0.2
 
         static let standard = Timing()
 
-        var successTotal: TimeInterval { successHop + successLand + successRebound + successSink }
+        var successTotal: TimeInterval { successHop + successPress + successSink }
+    }
+
+    /// How deep Typo sits behind the capsule edge in each calm state.
+    enum Peek {
+        static let listening: CGFloat = 0.3
+        static let thinking: CGFloat = 0.42
+        static let reacting: CGFloat = 0.22
     }
 
     // The meter maps -50...0 dBFS onto 0...1 (AudioCaptureEngine.calculateLevel).
@@ -62,9 +78,12 @@ struct TypoPerformance: Equatable {
     private(set) var stageStart: TimeInterval = 0
     private(set) var isLoud = false
     private(set) var level: Float = 0
+    private var loudChangedAt: TimeInterval = -.infinity
     private var loudSince: TimeInterval?
     private var calmSince: TimeInterval?
     private var quietSince: TimeInterval?
+    /// Where the exit started from, so the sink never jumps.
+    private var exitFromSink: CGFloat = Peek.listening
 
     init(timing: Timing = .standard, reduceMotion: Bool = false) {
         self.timing = timing
@@ -85,22 +104,37 @@ struct TypoPerformance: Equatable {
     /// comes straight back up instead of finishing its exit.
     mutating func begin(at t: TimeInterval) {
         switch stage {
-        case .hidden, .exiting:
+        case .hidden, .exiting, .reacting:
             enter(.entering, at: t)
+            resetVoice()
         case .entering, .listening, .thinking:
             break
         }
-        resetVoice()
     }
 
     /// Recognition or post-processing is running after the user stopped talking.
     mutating func think(at t: TimeInterval) {
         switch stage {
-        case .hidden, .exiting, .thinking:
-            return
-        case .entering, .listening:
+        case .entering, .listening, .reacting:
             enter(.thinking, at: t)
             resetVoice()
+        case .hidden, .exiting, .thinking:
+            break
+        }
+    }
+
+    /// The bar shows a completion or error message; Typo keeps a matching face.
+    mutating func react(_ reaction: Reaction, at t: TimeInterval) {
+        switch stage {
+        case .hidden:
+            enter(.reacting(reaction), at: t)
+        case .entering, .listening, .thinking:
+            enter(.reacting(reaction), at: t)
+            resetVoice()
+        case .reacting(let current) where current != reaction:
+            enter(.reacting(reaction), at: t)
+        case .reacting, .exiting:
+            break
         }
     }
 
@@ -108,7 +142,8 @@ struct TypoPerformance: Equatable {
         switch stage {
         case .hidden, .exiting:
             return
-        case .entering, .listening, .thinking:
+        case .entering, .listening, .thinking, .reacting:
+            exitFromSink = max(0, min(1, pose(at: t).sink))
             enter(.exiting(exit), at: t)
             resetVoice()
         }
@@ -128,7 +163,7 @@ struct TypoPerformance: Equatable {
             trackVoice(at: t)
         case .exiting(let exit):
             if Self.reached(t - stageStart, exitDuration(exit)) { enter(.hidden, at: t) }
-        case .hidden, .thinking:
+        case .hidden, .thinking, .reacting:
             break
         }
     }
@@ -138,7 +173,7 @@ struct TypoPerformance: Equatable {
         switch exit {
         case .success: return timing.successTotal
         case .cancelled: return timing.cancelSink
-        case .failed: return timing.failHold + timing.failSink
+        case .failed: return timing.failSink
         }
     }
 
@@ -149,6 +184,7 @@ struct TypoPerformance: Equatable {
 
     private mutating func resetVoice() {
         isLoud = false
+        loudChangedAt = -.infinity
         loudSince = nil
         calmSince = nil
         quietSince = nil
@@ -160,6 +196,7 @@ struct TypoPerformance: Equatable {
                 if calmSince == nil { calmSince = t }
                 if let since = calmSince, Self.reached(t - since, timing.loudRelease) {
                     isLoud = false
+                    loudChangedAt = t
                     calmSince = nil
                     loudSince = nil
                 }
@@ -168,7 +205,10 @@ struct TypoPerformance: Equatable {
             }
         } else if level >= Self.loudLevel {
             if loudSince == nil { loudSince = t }
-            if let since = loudSince, Self.reached(t - since, timing.loudHold) { isLoud = true }
+            if let since = loudSince, Self.reached(t - since, timing.loudHold) {
+                isLoud = true
+                loudChangedAt = t
+            }
         } else {
             loudSince = nil
         }
@@ -184,7 +224,7 @@ struct TypoPerformance: Equatable {
 
     struct Pose: Equatable {
         var expression = TypoExpression()
-        /// 0 stands on the baseline; 1 has sunk completely below it.
+        /// 0 stands fully out over the capsule edge; 1 is hidden behind it.
         var sink: CGFloat = 1
         /// Upward offset in design units.
         var hop: CGFloat = 0
@@ -206,14 +246,15 @@ struct TypoPerformance: Equatable {
             let p = min(1, age / timing.enter)
             pose.expression = listeningFace(at: t)
             if reduceMotion {
-                pose.sink = 0
+                pose.sink = Peek.listening
                 pose.opacity = p
             } else {
-                pose.sink = 1 - Self.easeOutBack(p)
+                pose.sink = 1 - (1 - Peek.listening) * Self.easeOutBack(p)
             }
         case .listening:
-            pose.sink = 0
             pose.expression = listeningFace(at: t)
+            let shift = reduceMotion ? 1 : CGFloat(min(1, (t - loudChangedAt) / timing.loudRise))
+            pose.sink = isLoud ? Peek.listening * (1 - shift) : Peek.listening * shift
             if isLoud {
                 pose.expression = Self.bristled
                 pose.shake = reduceMotion ? 0 : CGFloat(sin(t * 70)) * 9
@@ -222,15 +263,17 @@ struct TypoPerformance: Equatable {
                 pose.hop = CGFloat(abs(sin(t * .pi * 2.4))) * 14 * CGFloat(min(1, voice * 2))
             }
         case .thinking:
-            pose.sink = 0
+            pose.sink = Peek.thinking
             var e = TypoExpression()
             e.look = CGSize(width: -18, height: -26)
             e.mouth = .flat
-            e.armL = .init(up: true, degrees: 10)
             e.bubble = .question
             e.bubbleOpacity = min(1, age / 0.18)
             pose.expression = e
             pose.tiltDegrees = reduceMotion ? 0 : sin(t * 1.7) * 2.5
+        case .reacting(let reaction):
+            pose.sink = Peek.reacting
+            pose.expression = Self.face(for: reaction)
         case .exiting(let exit):
             pose = exitPose(exit, age: age)
         }
@@ -270,15 +313,36 @@ struct TypoPerformance: Equatable {
         return e
     }()
 
+    static func face(for reaction: Reaction) -> TypoExpression {
+        var e = TypoExpression()
+        switch reaction {
+        case .done:
+            e.eyeL = .happy
+            e.eyeR = .happy
+            e.mouth = .smile
+        case .failed:
+            e.eyeL = .dot
+            e.eyeR = .dot
+            e.mouth = .tinyO
+            e.sweat = true
+            e.bubble = .interrobang
+            e.bubbleOpacity = 1
+        }
+        return e
+    }
+
     private func exitPose(_ exit: Exit, age: TimeInterval) -> Pose {
         var pose = Pose()
-        pose.sink = 0
+        pose.sink = exitFromSink
+        let tm = timing
         if reduceMotion {
             pose.expression = exitFace(exit)
-            pose.opacity = max(0, 1 - age / timing.reducedMotionFade)
+            pose.opacity = max(0, 1 - age / tm.reducedMotionFade)
             return pose
         }
-        let tm = timing
+        func sinkFrom(_ start: CGFloat, progress p: Double) -> CGFloat {
+            start + (1 - start) * CGFloat(p * p)
+        }
         switch exit {
         case .success:
             var happy = TypoExpression()
@@ -290,10 +354,9 @@ struct TypoPerformance: Equatable {
             if age < tm.successHop {
                 let p = age / tm.successHop
                 pose.expression = happy
-                pose.hop = CGFloat(sin(p * .pi)) * 170
-                pose.squash = 1 + 0.08 * CGFloat(sin(p * .pi))
-            } else if age < tm.successHop + tm.successLand {
-                let p = (age - tm.successHop) / tm.successLand
+                pose.hop = CGFloat(sin(p * .pi)) * 70
+            } else if age < tm.successHop + tm.successPress {
+                let p = (age - tm.successHop) / tm.successPress
                 var pressed = TypoExpression()
                 pressed.eyeL = .chevron
                 pressed.eyeR = .chevron
@@ -302,53 +365,39 @@ struct TypoPerformance: Equatable {
                 pressed.armR = .init(up: true, degrees: 60)
                 pressed.impact = true
                 pose.expression = pressed
-                pose.squash = 1 - 0.28 * CGFloat(sin(p * .pi / 2))
-            } else if age < tm.successHop + tm.successLand + tm.successRebound {
-                let p = (age - tm.successHop - tm.successLand) / tm.successRebound
-                happy.mouth = .smile
-                pose.expression = happy
-                pose.squash = 0.72 + 0.4 * CGFloat(sin(p * .pi / 2)) - 0.12 * CGFloat(p)
+                pose.squash = 1 - 0.3 * CGFloat(sin(p * .pi / 2))
             } else {
-                let p = min(1, (age - tm.successHop - tm.successLand - tm.successRebound) / tm.successSink)
+                let p = min(1, (age - tm.successHop - tm.successPress) / tm.successSink)
                 happy.mouth = .smile
                 pose.expression = happy
-                pose.sink = CGFloat(p * p)
+                pose.squash = 0.7 + 0.3 * CGFloat(p)
+                pose.sink = sinkFrom(exitFromSink, progress: p)
             }
         case .cancelled:
             pose.expression = exitFace(exit)
-            let p = min(1, age / tm.cancelSink)
-            pose.sink = CGFloat(p * p)
+            pose.sink = sinkFrom(exitFromSink, progress: min(1, age / tm.cancelSink))
         case .failed:
             pose.expression = exitFace(exit)
-            if age > tm.failHold {
-                let p = min(1, (age - tm.failHold) / tm.failSink)
-                pose.sink = CGFloat(p * p)
-            }
+            pose.sink = sinkFrom(exitFromSink, progress: min(1, age / tm.failSink))
         }
         return pose
     }
 
     private func exitFace(_ exit: Exit) -> TypoExpression {
-        var e = TypoExpression()
         switch exit {
         case .success:
-            e.eyeL = .happy
-            e.eyeR = .happy
+            return Self.face(for: .done)
+        case .failed:
+            return Self.face(for: .failed)
         case .cancelled:
+            var e = TypoExpression()
             e.eyeL = .sad
             e.eyeR = .sad
             e.mouth = .frown
             e.armL = .init(degrees: 10)
             e.armR = .init(degrees: -10)
-        case .failed:
-            e.eyeL = .dot
-            e.eyeR = .dot
-            e.mouth = .tinyO
-            e.sweat = true
-            e.bubble = .interrobang
-            e.bubbleOpacity = 1
+            return e
         }
-        return e
     }
 
     /// Overshoots slightly past 1 before settling, like a key springing up.

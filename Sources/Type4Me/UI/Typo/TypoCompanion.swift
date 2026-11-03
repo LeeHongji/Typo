@@ -1,4 +1,3 @@
-import AppKit
 import QuartzCore
 import SwiftUI
 
@@ -10,199 +9,157 @@ enum TypoCompanionSettings {
     }
 }
 
-/// Which floating-bar phases Typo performs in place of the bar. Messages that
-/// need words (done, error, recovery) stay with the bar.
-enum TypoCompanionRouting {
-    static func handles(_ phase: FloatingBarPhase) -> Bool {
-        switch phase {
-        case .preparing, .recording, .finishing, .processing:
-            return true
-        case .hidden, .recovering, .done, .error:
-            return false
-        }
+/// Where Typo sits on the recording bar: centred over the finish control,
+/// peeking over the capsule's top edge.
+struct TypoBuddyMetrics: Equatable {
+    /// Typo's centre, measured from the capsule's leading edge.
+    let anchorX: CGFloat
+    /// Height of Typo's body when it stands fully out.
+    let bodyHeight: CGFloat
+
+    static let regular = TypoBuddyMetrics(
+        anchorX: TF.recordingLeadingInset + TF.recordingFinishControlSize / 2,
+        bodyHeight: 32
+    )
+    static let compact = TypoBuddyMetrics(
+        anchorX: TF.compactIndicatorControlWidth / 2 + 4,
+        bodyHeight: 26
+    )
+
+    static func forCompact(_ compact: Bool) -> TypoBuddyMetrics { compact ? .compact : .regular }
+
+    var scale: CGFloat { bodyHeight / TypoGeometry.bodyHeight }
+
+    /// Room above the capsule's top edge for the tallest pose: the shout
+    /// lines (round caps and white edge included) when Typo bristles.
+    var headroom: CGFloat {
+        ceil((TypoGeometry.baselineY - 400) * scale)
+    }
+
+    /// Canvas width from the capsule's leading edge: Typo plus its bubble.
+    var trailingExtent: CGFloat {
+        ceil(anchorX + (1830 - TypoRenderer.feetAnchor.x) * scale)
+    }
+
+    /// How far Typo's arms and outline reach past the capsule's leading edge.
+    var leadingOverhang: CGFloat {
+        max(0, ceil((TypoRenderer.feetAnchor.x - 340) * scale - anchorX))
     }
 }
 
-enum TypoCompanionLayout {
-    static let width: CGFloat = 150
-
-    static var height: CGFloat {
-        let v = TypoGeometry.viewport
-        return (width * v.height / v.width).rounded(.up)
-    }
-
-    /// Typo stands where the bar's capsule would be: its feet on the capsule's
-    /// bottom edge, its body centred on the capsule.
-    static func panelFrame(forCapsule capsule: NSRect) -> NSRect {
-        let v = TypoGeometry.viewport
-        let scale = width / v.width
-        let bodyCentreX: CGFloat = 978
-        let baselineFromBottom = (v.maxY - TypoGeometry.baselineY) * scale
-        return NSRect(
-            x: (capsule.midX - (bodyCentreX - v.minX) * scale).rounded(),
-            y: (capsule.minY - baselineFromBottom).rounded(),
-            width: width,
-            height: height
-        )
-    }
+/// What the recording bar tells Typo each frame.
+struct TypoBuddyCue: Equatable {
+    var phase: FloatingBarPhase
+    /// Set while the bar plays its exit; `.output` means text landed.
+    var exitStyle: FloatingBarHideStyle?
+    var feedbackKind: FeedbackKind
 }
 
+/// Turns bar cues into performance events. A class so the timeline can advance
+/// one long-lived performance without invalidating the bar's view state.
 @MainActor
-@Observable
-final class TypoCompanionModel {
-    var pose = TypoPerformance.Pose(opacity: 0)
-}
+final class TypoDirector {
+    private(set) var performance = TypoPerformance()
 
-private final class TypoCompanionPanel: NSPanel {
-    init(contentRect: NSRect) {
-        super.init(
-            contentRect: contentRect,
-            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        isFloatingPanel = true
-        level = .floating
-        isOpaque = false
-        backgroundColor = .clear
-        hasShadow = false
-        ignoresMouseEvents = true
-        hidesOnDeactivate = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        animationBehavior = .none
+    var isVisible: Bool { performance.isVisible }
+
+    func pose(for cue: TypoBuddyCue, level: Float, reduceMotion: Bool, at t: TimeInterval) -> TypoPerformance.Pose {
+        apply(cue, reduceMotion: reduceMotion, at: t)
+        performance.update(level: level, at: t)
+        return performance.pose(at: t)
     }
 
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
-}
-
-/// Owns Typo's window and drives its performance from the app state.
-///
-/// FloatingBarController hands it each show/hide request first; when Typo is
-/// enabled and the phase is one it performs, the bar stays hidden.
-@MainActor
-final class TypoCompanionController {
-    private let state: AppState
-    private let defaults: UserDefaults
-    private let model = TypoCompanionModel()
-    private var performance = TypoPerformance()
-    private var panel: TypoCompanionPanel?
-    private var timer: Timer?
-
-    init(state: AppState, defaults: UserDefaults = .standard) {
-        self.state = state
-        self.defaults = defaults
-    }
-
-    var isPerforming: Bool { performance.isVisible }
-
-    /// Returns true when Typo takes this show request instead of the bar.
-    func takeShowRequest() -> Bool {
-        let now = CACurrentMediaTime()
-        guard TypoCompanionSettings.isEnabled(defaults), TypoCompanionRouting.handles(state.barPhase) else {
-            // The bar is about to show a message; Typo steps aside.
-            if performance.isVisible { performance.finish(.failed, at: now) }
-            return false
+    func apply(_ cue: TypoBuddyCue, reduceMotion: Bool, at t: TimeInterval) {
+        if !performance.isVisible { performance.reduceMotion = reduceMotion }
+        if let style = cue.exitStyle {
+            if case .exiting = performance.stage { return }
+            let exit: TypoPerformance.Exit
+            switch (style, performance.stage) {
+            case (.output, _), (_, .reacting(.done)):
+                exit = .success
+            case (_, .reacting(.failed)):
+                exit = .failed
+            default:
+                exit = .cancelled
+            }
+            performance.finish(exit, at: t)
+            return
         }
-        if !performance.isVisible {
-            performance.reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-            placePanel()
-        }
-        sync(at: now)
-        startTicking()
-        return true
-    }
-
-    /// Mirrors a bar hide request. A successful paste uses the output style.
-    func handleHide(style: FloatingBarHideStyle) {
-        guard performance.isVisible else { return }
-        performance.finish(style == .output ? .success : .cancelled, at: CACurrentMediaTime())
-        startTicking()
-    }
-
-    private var isExiting: Bool {
-        if case .exiting = performance.stage { return true }
-        return false
-    }
-
-    private func sync(at now: TimeInterval) {
-        switch state.barPhase {
+        switch cue.phase {
         case .preparing, .recording:
-            performance.begin(at: now)
-        case .finishing, .processing:
-            if !performance.isVisible { performance.begin(at: now) }
-            performance.think(at: now)
+            performance.begin(at: t)
+        case .finishing, .processing, .recovering:
+            if !performance.isVisible { performance.begin(at: t) }
+            performance.think(at: t)
+        case .done:
+            performance.react(Self.reaction(for: cue.feedbackKind), at: t)
+        case .error:
+            performance.react(.failed, at: t)
         case .hidden:
-            // A session that ended without a hide request must not leave Typo behind.
-            performance.finish(.cancelled, at: now)
-        case .recovering, .done, .error:
-            performance.finish(.failed, at: now)
+            // The bar vanished without an exit (for example a preview reset).
+            performance.finish(.cancelled, at: t)
         }
     }
 
-    private func startTicking() {
-        guard timer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
+    static func reaction(for kind: FeedbackKind) -> TypoPerformance.Reaction {
+        switch kind {
+        case .standard, .macActionSuccess:
+            return .done
+        case .warning, .macActionFailure, .macActionUnsure:
+            return .failed
         }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-        tick()
-    }
-
-    private func tick() {
-        let now = CACurrentMediaTime()
-        if performance.isVisible && !isExiting { sync(at: now) }
-        performance.update(level: state.audioLevel.current, at: now)
-        model.pose = performance.pose(at: now)
-        if performance.isVisible {
-            panel?.orderFrontRegardless()
-        } else {
-            timer?.invalidate()
-            timer = nil
-            panel?.orderOut(nil)
-        }
-    }
-
-    private func placePanel() {
-        let screen = FloatingBarPanel.screenUnderMouse()
-        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let style = RecordingIndicatorStyle.current(userDefaults: defaults)
-        let baseHeight = FloatingBarPlacementGeometry.baseCapsuleHeight(for: style)
-        let centre = FloatingBarPlacementGeometry.resolveCenter(
-            FloatingBarPlacementStore.load(defaults),
-            visibleFrame: visible,
-            baseHeight: baseHeight
-        )
-        let capsule = FloatingBarPlacementGeometry.baseCapsuleRect(center: centre, style: style)
-        let frame = TypoCompanionLayout.panelFrame(forCapsule: capsule)
-        let panel = self.panel ?? makePanel(frame: frame)
-        panel.setFrame(frame, display: false)
-    }
-
-    private func makePanel(frame: NSRect) -> TypoCompanionPanel {
-        let panel = TypoCompanionPanel(contentRect: frame)
-        let hosting = NSHostingView(rootView: TypoCompanionView(model: model))
-        hosting.sizingOptions = []
-        hosting.frame = NSRect(origin: .zero, size: frame.size)
-        hosting.autoresizingMask = [.width, .height]
-        panel.contentView = hosting
-        self.panel = panel
-        return panel
     }
 }
 
-/// Draws the current pose. Everything below the baseline is clipped, so Typo
-/// rises out of and sinks back into the line it stands on.
-struct TypoCompanionView: View {
-    let model: TypoCompanionModel
+/// Typo peeking over the recording bar. The view spans the capsule plus the
+/// room above it; everything inside the capsule's shape is masked, so the part
+/// of Typo below the edge reads as hidden behind the bar.
+struct TypoBuddyView: View {
+    let cue: TypoBuddyCue
+    let meter: AudioLevelMeter
+    let metrics: TypoBuddyMetrics
+    let capsuleSize: CGSize
+    let cornerRadius: CGFloat
+
+    @State private var director = TypoDirector()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var isIdle: Bool {
+        cue.phase == .hidden && cue.exitStyle == nil && !director.isVisible
+    }
 
     var body: some View {
-        // Read outside the renderer closure so Observation tracks the pose.
-        let pose = model.pose
-        Canvas { ctx, size in
-            TypoRenderer.draw(pose, in: &ctx, size: size)
+        TimelineView(.animation(paused: isIdle)) { timeline in
+            let pose = director.pose(
+                for: cue,
+                level: meter.current,
+                reduceMotion: reduceMotion,
+                at: timeline.date.timeIntervalSinceReferenceDate
+            )
+            Canvas { ctx, size in
+                let capsule = CGRect(
+                    x: metrics.leadingOverhang,
+                    y: metrics.headroom,
+                    width: capsuleSize.width,
+                    height: capsuleSize.height
+                )
+                var clip = Path(CGRect(origin: .zero, size: size))
+                clip.addPath(Path(roundedRect: capsule, cornerRadius: cornerRadius, style: .continuous))
+                ctx.clip(to: clip, style: FillStyle(eoFill: true))
+                TypoRenderer.draw(
+                    pose,
+                    in: &ctx,
+                    line: CGPoint(x: capsule.minX + metrics.anchorX, y: capsule.minY),
+                    scale: metrics.scale
+                )
+            }
         }
+        .frame(
+            width: metrics.leadingOverhang + max(metrics.trailingExtent, capsuleSize.width),
+            height: metrics.headroom + capsuleSize.height
+        )
+        .offset(x: -metrics.leadingOverhang, y: -metrics.headroom)
         .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

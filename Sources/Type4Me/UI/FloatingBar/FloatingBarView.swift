@@ -317,6 +317,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @AppStorage(RecordingGlassTuning.StorageKey.shadowStrength) private var customGlassShadow = RecordingGlassTuning.customDefault.shadowStrength
     @AppStorage(RecordingGlassTuning.StorageKey.keepsActiveAppearance) private var customGlassKeepsActive = RecordingGlassTuning.customDefault.keepsActiveAppearance
     @AppStorage(RecordingIndicatorStyle.storageKey) private var indicatorStyle = RecordingIndicatorStyle.defaultValue
+    @AppStorage(TypoCompanionSettings.enabledKey) private var typoCompanionEnabled = false
     @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage(AppearancePreferenceDefaults.showTooltipsKey) private var showTooltips = AppearancePreferenceDefaults.showTooltipsDefault
@@ -524,6 +525,50 @@ struct FloatingBarView<S: FloatingBarState>: View {
         chrome != nil ? TF.barPlacementHandleReserve : 0
     }
 
+    // MARK: - Typo
+
+    private var showsTypo: Bool {
+        typoCompanionEnabled && presentedPhase != .hidden
+    }
+
+    private var typoMetrics: TypoBuddyMetrics {
+        .forCompact(usesCompactPresentation)
+    }
+
+    /// Room Typo needs above the capsule's top edge.
+    private var typoClearance: CGFloat {
+        showsTypo ? typoMetrics.headroom : 0
+    }
+
+    /// Extra room above a top-anchored bar, beyond what its drag handle reserves.
+    private var typoTopExtra: CGFloat {
+        anchor == .top ? max(0, typoClearance - handleReserve) : 0
+    }
+
+    /// How far an overlay above the capsule moves up to clear Typo. Only
+    /// overlays that reach over Typo's corner move; a top-anchored bar shows its
+    /// overlays below the capsule, away from Typo.
+    private func typoRoom(for overlay: FloatingBarTopOverlay?) -> CGFloat {
+        guard anchor == .bottom, showsTypo, let overlay else { return 0 }
+        switch overlay {
+        case .transcript:
+            return typoClearance
+        case .action(let action):
+            return action == .finish ? typoClearance : 0
+        case .mode, .handle:
+            let leadingGap = (capsuleWidth - topOverlaySize(overlay).width) / 2
+            return leadingGap < typoMetrics.trailingExtent ? typoClearance : 0
+        }
+    }
+
+    private var typoCue: TypoBuddyCue {
+        TypoBuddyCue(
+            phase: state.barPhase,
+            exitStyle: state.barPhase == .hidden ? chrome?.exitSnapshot?.hideStyle : nil,
+            feedbackKind: presentedFeedbackKind
+        )
+    }
+
     private var showTranscriptPopup: Bool {
         resolveShowTranscriptPopup(
             usesCompactPresentation: usesCompactPresentation,
@@ -662,10 +707,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
         guard shouldRenderCapsule else { return .hidden }
 
         let capsuleSize = NSSize(width: capsuleWidth, height: capsuleHeight)
-        let reserve = handleReserve
+        // A top-anchored bar keeps Typo's room on its anchor side, so placement
+        // clamps the capsule low enough for Typo to stay on screen.
+        let reserve = handleReserve + typoTopExtra
         guard let overlay = activeTopOverlay else {
+            let typoRoom = anchor == .bottom ? typoClearance : 0
             return FloatingBarPanelLayout(
-                contentSize: NSSize(width: capsuleSize.width, height: capsuleSize.height + reserve),
+                contentSize: NSSize(width: capsuleSize.width, height: capsuleSize.height + reserve + typoRoom),
                 capsuleSize: capsuleSize,
                 anchorSideReserve: reserve
             )
@@ -692,10 +740,12 @@ struct FloatingBarView<S: FloatingBarState>: View {
             contentWidth = capsuleSize.width
             horizontalOverflow = 0
         }
+        // Typo may stand taller than a short overlay that does not move for it.
+        let aboveCapsule = max(topOverlayGap + overlaySize.height, anchor == .bottom ? typoClearance : 0)
         return FloatingBarPanelLayout(
             contentSize: NSSize(
                 width: contentWidth,
-                height: capsuleSize.height + topOverlayGap + overlaySize.height + reserve
+                height: capsuleSize.height + aboveCapsule + reserve
             ),
             horizontalOverflow: horizontalOverflow,
             capsuleSize: capsuleSize,
@@ -734,6 +784,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 capsuleAndHandle
             }
         }
+        .padding(.top, typoTopExtra)
         .padding(TF.floatingPanelShadowInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: anchor == .top ? .top : .bottom)
         // the enclosing window and repaint the whole Settings window when the
@@ -907,6 +958,17 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 // and out so it doesn't snap into place when recording finishes.
                 capsuleBorder
                     .animation(.easeInOut(duration: 0.15), value: presentedPhase)
+            }
+            .overlay(alignment: .topLeading) {
+                if showsTypo {
+                    TypoBuddyView(
+                        cue: typoCue,
+                        meter: state.audioLevel,
+                        metrics: typoMetrics,
+                        capsuleSize: CGSize(width: capsuleWidth, height: capsuleHeight),
+                        cornerRadius: barCornerRadius
+                    )
+                }
             }
             // Critically damped (dampingFraction 1.0) so the width never
             // overshoots and settles back leftward between characters. An
@@ -1655,11 +1717,12 @@ struct FloatingBarView<S: FloatingBarState>: View {
     // MARK: - Top overlays
 
     private var topOverlayGap: CGFloat {
+        let typoRoom = typoRoom(for: activeTopOverlay)
         switch activeTopOverlay {
         case .action, .mode, .handle:
-            return TF.recordingTooltipGap
+            return TF.recordingTooltipGap + typoRoom
         case .transcript, nil:
-            return TF.transcriptPopupGap
+            return TF.transcriptPopupGap + typoRoom
         }
     }
 

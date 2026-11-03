@@ -670,8 +670,8 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
         settingsToggleRow(
             L("Typo 小键帽", "Typo Keycap"),
             subtitle: L(
-                "开启后，录音、识别和输出时由小键帽 Typo 代替录音条做出反应；提示和报错仍显示在录音条上。",
-                "Typo the keycap reacts while you record, while text is processed, and when it lands, in place of the recording bar. Notices and errors still use the bar."
+                "开启后，小键帽 Typo 会从录音条后面探出头，陪你说话、思考，输出时按下收回。",
+                "Typo the keycap peeks over the recording bar while you talk and think, then presses down when your text lands."
             ),
             isOn: $typoCompanionEnabled
         )

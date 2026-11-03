@@ -14,9 +14,15 @@ struct FloatingBarExitSnapshot: Equatable {
     let activityKind: RecordingActivityKind
     let showsReviseUndo: Bool
     let pinsTranscriptPopup: Bool
+    /// How the bar is leaving: `.output` means text was delivered.
+    var hideStyle: FloatingBarHideStyle = .standard
 
     @MainActor
-    static func capture(from state: AppState, generation: Int) -> FloatingBarExitSnapshot {
+    static func capture(
+        from state: AppState,
+        generation: Int,
+        hideStyle: FloatingBarHideStyle = .standard
+    ) -> FloatingBarExitSnapshot {
         let segments = (state.barPhase == .finishing && state.finishingSnapshotSegments != nil)
             ? state.finishingSnapshotSegments!
             : state.segments
@@ -29,7 +35,8 @@ struct FloatingBarExitSnapshot: Equatable {
             feedbackKind: state.feedbackKind,
             activityKind: state.activityKind,
             showsReviseUndo: state.latestReviseUndoTicketID != nil,
-            pinsTranscriptPopup: state.pinsTranscriptPopup
+            pinsTranscriptPopup: state.pinsTranscriptPopup,
+            hideStyle: hideStyle
         )
     }
 }

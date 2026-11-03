@@ -4,6 +4,7 @@ import XCTest
 
 final class TypoPerformanceTests: XCTestCase {
     private let timing = TypoPerformance.Timing.standard
+    private typealias Peek = TypoPerformance.Peek
 
     private func listening(at t: TimeInterval = 0) -> TypoPerformance {
         var p = TypoPerformance()
@@ -19,15 +20,15 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertEqual(p.pose(at: 0).opacity, 0)
     }
 
-    func testRisesOutOfTheBaselineWithOvershootThenListens() {
+    func testRisesFromBehindTheBarWithOvershootThenPeeks() {
         var p = TypoPerformance()
         p.begin(at: 10)
         XCTAssertEqual(p.stage, .entering)
-        XCTAssertEqual(p.pose(at: 10).sink, 1, accuracy: 0.001, "starts fully below the line")
-        XCTAssertLessThan(p.pose(at: 10 + timing.enter * 0.7).sink, 0, "springs slightly above the line")
+        XCTAssertEqual(p.pose(at: 10).sink, 1, accuracy: 0.001, "starts fully hidden behind the bar")
+        XCTAssertLessThan(p.pose(at: 10 + timing.enter * 0.7).sink, Peek.listening, "springs a little higher than its resting peek")
         p.update(level: 0, at: 10 + timing.enter + 0.01)
         XCTAssertEqual(p.stage, .listening)
-        XCTAssertEqual(p.pose(at: 10 + timing.enter + 0.02).sink, 0)
+        XCTAssertEqual(p.pose(at: 10 + timing.enter + 0.02).sink, Peek.listening, accuracy: 0.001)
     }
 
     func testMouthFollowsVoice() {
@@ -52,7 +53,7 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertEqual(p.pose(at: start + timing.blinkPeriod + 0.05).expression.eyeL, .open)
     }
 
-    func testBristlesOnlyWhenShoutingIsHeld() {
+    func testShoutingIsHeldBeforeTypoBristlesAndStandsFullyOut() {
         var p = listening()
         p.update(level: 0.9, at: 1.0)
         p.update(level: 0.9, at: 1.2)
@@ -61,14 +62,16 @@ final class TypoPerformanceTests: XCTestCase {
         p.update(level: 0.9, at: 2.0)
         p.update(level: 0.9, at: 2.0 + timing.loudHold)
         XCTAssertTrue(p.isLoud)
-        let pose = p.pose(at: 2.0 + timing.loudHold)
-        XCTAssertEqual(pose.expression.spikiness, 1)
-        XCTAssertEqual(pose.expression.eyeL, .ring)
-        XCTAssertEqual(pose.expression.bubble, .exclaim)
-        XCTAssertTrue(pose.expression.shout)
+
+        let bristling = p.pose(at: 2.0 + timing.loudHold + timing.loudRise)
+        XCTAssertEqual(bristling.expression.spikiness, 1)
+        XCTAssertEqual(bristling.expression.eyeL, .ring)
+        XCTAssertEqual(bristling.expression.bubble, .exclaim)
+        XCTAssertEqual(bristling.sink, 0, accuracy: 0.001, "jumps fully out from behind the bar")
+        XCTAssertGreaterThan(p.pose(at: 2.0 + timing.loudHold + 0.01).sink, 0.2, "rises out gradually, not in one frame")
     }
 
-    func testCalmsDownAfterReleaseWindow() {
+    func testCalmsDownAndSettlesBackToItsPeek() {
         var p = listening()
         p.update(level: 0.9, at: 1.0)
         p.update(level: 0.9, at: 1.4)
@@ -78,7 +81,9 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertTrue(p.isLoud, "stays bristled through a short dip")
         p.update(level: 0.4, at: 1.5 + timing.loudRelease)
         XCTAssertFalse(p.isLoud)
-        XCTAssertEqual(p.pose(at: 1.8).expression.spikiness, 0)
+        let settled = p.pose(at: 1.5 + timing.loudRelease + timing.loudRise)
+        XCTAssertEqual(settled.expression.spikiness, 0)
+        XCTAssertEqual(settled.sink, Peek.listening, accuracy: 0.001)
     }
 
     func testLongSilenceShowsListeningBubble() {
@@ -94,14 +99,14 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertNil(p.pose(at: 4).expression.bubble, "speaking again clears the bubble")
     }
 
-    func testThinkingAfterRecording() {
+    func testThinkingPeeksLowerWithAQuestion() {
         var p = listening()
         p.think(at: 2)
         XCTAssertEqual(p.stage, .thinking)
         let pose = p.pose(at: 2.5)
         XCTAssertEqual(pose.expression.bubble, .question)
         XCTAssertEqual(pose.expression.mouth, .flat)
-        XCTAssertEqual(pose.sink, 0)
+        XCTAssertEqual(pose.sink, Peek.thinking, accuracy: 0.001)
     }
 
     func testThinkIsIgnoredWhileHidden() {
@@ -110,25 +115,43 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertEqual(p.stage, .hidden)
     }
 
-    func testSuccessHopsPressesLikeAKeyThenSinks() {
+    func testReactsHappilyOrStartledWhileTheBarShowsAMessage() {
+        var p = listening()
+        p.react(.done, at: 2)
+        XCTAssertEqual(p.pose(at: 2.1).expression.eyeL, .happy)
+        p.react(.failed, at: 2.5)
+        let startled = p.pose(at: 2.6).expression
+        XCTAssertEqual(startled.bubble, .interrobang)
+        XCTAssertTrue(startled.sweat)
+        XCTAssertEqual(p.pose(at: 2.6).sink, Peek.reacting, accuracy: 0.001)
+    }
+
+    func testSuccessHopsPressesLikeAKeyAndSinksWithinTheBarsExit() {
+        XCTAssertLessThanOrEqual(timing.successTotal, 0.33, "must finish while the bar collapses")
         var p = listening()
         p.finish(.success, at: 5)
         XCTAssertEqual(p.stage, .exiting(.success))
 
         let hop = p.pose(at: 5 + timing.successHop / 2)
-        XCTAssertGreaterThan(hop.hop, 100)
+        XCTAssertGreaterThan(hop.hop, 40)
         XCTAssertEqual(hop.expression.eyeL, .happy)
 
-        let press = p.pose(at: 5 + timing.successHop + timing.successLand * 0.9)
+        let press = p.pose(at: 5 + timing.successHop + timing.successPress * 0.95)
         XCTAssertLessThan(press.squash, 0.8)
         XCTAssertEqual(press.expression.eyeL, .chevron)
         XCTAssertTrue(press.expression.impact)
 
-        let sinking = p.pose(at: 5 + timing.successTotal - 0.01)
-        XCTAssertGreaterThan(sinking.sink, 0.8)
-
+        XCTAssertGreaterThan(p.pose(at: 5 + timing.successTotal - 0.01).sink, 0.85)
         p.update(level: 0, at: 5 + timing.successTotal)
         XCTAssertEqual(p.stage, .hidden)
+    }
+
+    func testExitStartsFromWhereverTypoWas() {
+        var p = listening()
+        p.update(level: 0.9, at: 1.0)
+        p.update(level: 0.9, at: 1.5)
+        p.finish(.cancelled, at: 2)
+        XCTAssertEqual(p.pose(at: 2).sink, 0, accuracy: 0.02, "a bristling Typo sinks from fully out, without a jump")
     }
 
     func testCancelSinksSadly() {
@@ -139,15 +162,6 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertEqual(pose.expression.mouth, .frown)
         p.update(level: 0, at: 3 + timing.cancelSink)
         XCTAssertEqual(p.stage, .hidden)
-    }
-
-    func testFailureHoldsSurprisedBeforeSinking() {
-        var p = listening()
-        p.finish(.failed, at: 3)
-        let hold = p.pose(at: 3 + timing.failHold / 2)
-        XCTAssertEqual(hold.expression.bubble, .interrobang)
-        XCTAssertEqual(hold.sink, 0)
-        XCTAssertGreaterThan(p.pose(at: 3 + timing.failHold + timing.failSink * 0.9).sink, 0.5)
     }
 
     func testFinishTwiceKeepsTheFirstExit() {
@@ -168,7 +182,7 @@ final class TypoPerformanceTests: XCTestCase {
         var p = TypoPerformance(reduceMotion: true)
         p.begin(at: 0)
         let entering = p.pose(at: timing.enter / 2)
-        XCTAssertEqual(entering.sink, 0)
+        XCTAssertEqual(entering.sink, Peek.listening, accuracy: 0.001)
         XCTAssertEqual(entering.opacity, 0.5, accuracy: 0.01)
 
         p.update(level: 0.9, at: timing.enter + 0.01)
@@ -185,58 +199,111 @@ final class TypoPerformanceTests: XCTestCase {
     }
 }
 
-final class TypoCompanionRoutingTests: XCTestCase {
-    func testTypoPerformsOnlyTheWordlessPhases() {
-        for phase in [FloatingBarPhase.preparing, .recording, .finishing, .processing] {
-            XCTAssertTrue(TypoCompanionRouting.handles(phase), "\(phase)")
-        }
-        for phase in [FloatingBarPhase.hidden, .recovering, .done, .error] {
-            XCTAssertFalse(TypoCompanionRouting.handles(phase), "\(phase)")
-        }
+@MainActor
+final class TypoDirectorTests: XCTestCase {
+    private func cue(_ phase: FloatingBarPhase, exit: FloatingBarHideStyle? = nil, kind: FeedbackKind = .standard) -> TypoBuddyCue {
+        TypoBuddyCue(phase: phase, exitStyle: exit, feedbackKind: kind)
     }
 
+    func testRecordingThenProcessingThenOutput() {
+        let d = TypoDirector()
+        d.apply(cue(.recording), reduceMotion: false, at: 0)
+        XCTAssertEqual(d.performance.stage, .entering)
+        d.apply(cue(.processing), reduceMotion: false, at: 1)
+        XCTAssertEqual(d.performance.stage, .thinking)
+        d.apply(cue(.hidden, exit: .output), reduceMotion: false, at: 2)
+        XCTAssertEqual(d.performance.stage, .exiting(.success))
+    }
+
+    func testCancelledRecordingSinksSadly() {
+        let d = TypoDirector()
+        d.apply(cue(.recording), reduceMotion: false, at: 0)
+        d.apply(cue(.hidden, exit: .standard), reduceMotion: false, at: 1)
+        XCTAssertEqual(d.performance.stage, .exiting(.cancelled))
+    }
+
+    /// A notice queued during recording (an input-device switch) is shown as a
+    /// `.done` message right after the text lands. Typo must stay happy.
+    func testNoticeAfterSuccessfulOutputKeepsTypoHappy() {
+        let d = TypoDirector()
+        d.apply(cue(.recording), reduceMotion: false, at: 0)
+        d.apply(cue(.done, kind: .standard), reduceMotion: false, at: 1)
+        XCTAssertEqual(d.performance.stage, .reacting(.done))
+        d.apply(cue(.hidden, exit: .standard), reduceMotion: false, at: 3)
+        XCTAssertEqual(d.performance.stage, .exiting(.success))
+    }
+
+    func testFailuresLookStartled() {
+        let d = TypoDirector()
+        d.apply(cue(.processing), reduceMotion: false, at: 0)
+        d.apply(cue(.done, kind: .warning), reduceMotion: false, at: 1)
+        XCTAssertEqual(d.performance.stage, .reacting(.failed))
+        d.apply(cue(.hidden, exit: .standard), reduceMotion: false, at: 2)
+        XCTAssertEqual(d.performance.stage, .exiting(.failed))
+
+        let e = TypoDirector()
+        e.apply(cue(.recording), reduceMotion: false, at: 0)
+        e.apply(cue(.error), reduceMotion: false, at: 1)
+        XCTAssertEqual(e.performance.stage, .reacting(.failed))
+    }
+
+    func testFeedbackKindsMapToReactions() {
+        XCTAssertEqual(TypoDirector.reaction(for: .standard), .done)
+        XCTAssertEqual(TypoDirector.reaction(for: .macActionSuccess), .done)
+        XCTAssertEqual(TypoDirector.reaction(for: .warning), .failed)
+        XCTAssertEqual(TypoDirector.reaction(for: .macActionFailure), .failed)
+        XCTAssertEqual(TypoDirector.reaction(for: .macActionUnsure), .failed)
+    }
+
+    func testHiddenBarWithoutExitPutsTypoAway() {
+        let d = TypoDirector()
+        d.apply(cue(.recording), reduceMotion: false, at: 0)
+        d.apply(cue(.hidden), reduceMotion: false, at: 1)
+        XCTAssertEqual(d.performance.stage, .exiting(.cancelled))
+    }
+
+    func testReduceMotionIsCapturedWhenTypoAppears() {
+        let d = TypoDirector()
+        d.apply(cue(.recording), reduceMotion: true, at: 0)
+        XCTAssertTrue(d.performance.reduceMotion)
+    }
+}
+
+final class TypoBuddyMetricsTests: XCTestCase {
     func testCompanionIsOffByDefault() {
-        let defaults = UserDefaults(suiteName: "TypoCompanionRoutingTests-\(UUID().uuidString)")!
+        let defaults = UserDefaults(suiteName: "TypoBuddyMetricsTests-\(UUID().uuidString)")!
         XCTAssertFalse(TypoCompanionSettings.isEnabled(defaults))
         defaults.set(true, forKey: TypoCompanionSettings.enabledKey)
         XCTAssertTrue(TypoCompanionSettings.isEnabled(defaults))
     }
 
-    @MainActor
-    func testDisabledCompanionLeavesShowRequestsToTheBar() {
-        let defaults = UserDefaults(suiteName: "TypoCompanionRoutingTests-\(UUID().uuidString)")!
-        let state = AppState()
-        state.startRecording(showsPanel: false)
-        let controller = TypoCompanionController(state: state, defaults: defaults)
-        XCTAssertFalse(controller.takeShowRequest())
-        XCTAssertFalse(controller.isPerforming)
+    func testTypoSitsOverTheFinishControl() {
+        XCTAssertEqual(TypoBuddyMetrics.regular.anchorX, TF.recordingLeadingInset + TF.recordingFinishControlSize / 2)
+        XCTAssertLessThan(TypoBuddyMetrics.compact.bodyHeight, TypoBuddyMetrics.regular.bodyHeight)
     }
 
-    @MainActor
-    func testEnabledCompanionTakesRecordingAndReleasesMessages() {
-        let defaults = UserDefaults(suiteName: "TypoCompanionRoutingTests-\(UUID().uuidString)")!
-        defaults.set(true, forKey: TypoCompanionSettings.enabledKey)
-        let state = AppState()
-        state.startRecording(showsPanel: false)
-        let controller = TypoCompanionController(state: state, defaults: defaults)
-        XCTAssertTrue(controller.takeShowRequest())
-        XCTAssertTrue(controller.isPerforming)
-
-        state.showError("boom")
-        XCTAssertFalse(controller.takeShowRequest(), "errors are shown by the bar")
-        XCTAssertTrue(controller.isPerforming, "Typo is still sinking away")
+    func testTypoFitsInsideThePanelShadowInset() {
+        for metrics in [TypoBuddyMetrics.regular, .compact] {
+            XCTAssertLessThanOrEqual(metrics.leadingOverhang, TF.floatingPanelShadowInset,
+                                     "Typo's arms must not be clipped by the bar window")
+        }
     }
-}
 
-final class TypoCompanionLayoutTests: XCTestCase {
-    func testTypoStandsOnTheCapsuleBottomEdge() {
-        let capsule = NSRect(x: 600, y: 40, width: 220, height: 44)
-        let frame = TypoCompanionLayout.panelFrame(forCapsule: capsule)
-        let v = TypoGeometry.viewport
-        let scale = frame.width / v.width
-        let baseline = frame.minY + (v.maxY - TypoGeometry.baselineY) * scale
-        XCTAssertEqual(baseline, capsule.minY, accuracy: 1)
-        let bodyCentre = frame.minX + (978 - v.minX) * scale
-        XCTAssertEqual(bodyCentre, capsule.midX, accuracy: 1)
+    func testHeadroomCoversTheTallestPoses() {
+        for metrics in [TypoBuddyMetrics.regular, .compact] {
+            let outline = 1.5 / metrics.scale
+            // Bristling stands fully out with shout lines topping at y 450 (10-unit caps).
+            let bristling = TypoGeometry.baselineY - 450 + 10 + outline
+            // The success hop lifts the ears (y 556) by up to 70 units.
+            let hopping = TypoGeometry.baselineY - 556 + 70 + outline
+            let tallest = max(bristling, hopping) * metrics.scale
+            XCTAssertGreaterThanOrEqual(metrics.headroom, tallest)
+            XCTAssertLessThan(metrics.headroom, metrics.bodyHeight * 1.4, "keeps the bar window compact")
+        }
+    }
+
+    func testBubbleFitsBesideTypoOverTheCapsule() {
+        XCTAssertLessThan(TypoBuddyMetrics.regular.trailingExtent, TF.barWidthCompact)
+        XCTAssertLessThan(TypoBuddyMetrics.compact.trailingExtent, TF.compactIndicatorWidth)
     }
 }

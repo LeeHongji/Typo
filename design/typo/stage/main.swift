@@ -21,7 +21,7 @@ func script() -> [Frame] {
     p.think(at: 8); snap("思考", 8.3)
     p.finish(.success, at: 9)
     let tm = p.timing
-    for (l, a) in [("起跳", tm.successHop * 0.5), ("落地按下", tm.successHop + tm.successLand * 0.95), ("回弹", tm.successHop + tm.successLand + tm.successRebound * 0.6), ("下沉", tm.successHop + tm.successLand + tm.successRebound + tm.successSink * 0.5)] {
+    for (l, a) in [("起跳", tm.successHop * 0.5), ("落地按下", tm.successHop + tm.successPress * 0.95), ("下沉", tm.successHop + tm.successPress + tm.successSink * 0.5)] {
         snap(l, 9 + a)
     }
     var c = TypoPerformance(); c.begin(at: 0); c.update(level: 0, at: 0.5); c.finish(.cancelled, at: 1)

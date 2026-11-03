@@ -441,41 +441,48 @@ enum TypoRenderer {
 }
 
 extension TypoRenderer {
-    /// Draws a performance pose into a view of `size`. Everything below the
-    /// baseline is clipped, so Typo rises out of and sinks back into its line.
+    /// Design-space point between Typo's feet, centred under its body.
+    static let feetAnchor = CGPoint(x: 978, y: TypoGeometry.baselineY)
+    /// How far below its line Typo travels at `sink == 1`: far enough that the
+    /// ears and the speech bubble are hidden too.
+    static let sinkTravel: CGFloat = 800
+
+    /// Draws `pose` with Typo's feet on `line` (view coordinates), `scale`
+    /// view points per design unit. The caller decides what hides the part of
+    /// Typo below its line.
+    static func draw(_ pose: TypoPerformance.Pose, in ctx: inout GraphicsContext, line: CGPoint, scale: CGFloat) {
+        guard pose.opacity > 0.001, scale > 0 else { return }
+        var c = ctx
+        c.opacity = pose.opacity
+        c.translateBy(x: line.x, y: line.y)
+        c.scaleBy(x: scale, y: scale)
+        c.translateBy(x: pose.shake, y: pose.sink * sinkTravel - pose.hop)
+        c.rotate(by: .degrees(pose.tiltDegrees))
+        let squash = max(0.05, pose.squash)
+        c.scaleBy(x: 1 / sqrt(squash), y: squash)
+        c.translateBy(x: -feetAnchor.x, y: -feetAnchor.y)
+        // About 1.5 pt of white edge outside the black shapes at any size.
+        draw(pose.expression, outline: 3 / scale, in: &c)
+    }
+
+    /// Draws a pose standing on a plain line across a view of `size`, with a
+    /// soft shadow; used by the design frame renderer.
     static func draw(_ pose: TypoPerformance.Pose, in ctx: inout GraphicsContext, size: CGSize) {
         guard pose.opacity > 0.001 else { return }
         let v = TypoGeometry.viewport
         let scale = size.width / v.width
-        let baseline = TypoGeometry.baselineY
-        let feet = CGPoint(x: 978, y: baseline)
-
-        ctx.opacity = pose.opacity
-        ctx.scaleBy(x: scale, y: scale)
-        ctx.translateBy(x: -v.minX, y: -v.minY)
-        ctx.clip(to: Path(CGRect(x: v.minX, y: v.minY, width: v.width, height: baseline - v.minY + 1)))
-
+        let line = CGPoint(x: (feetAnchor.x - v.minX) * scale, y: (TypoGeometry.baselineY - v.minY) * scale)
+        var c = ctx
+        c.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: line.y + 1)))
         if pose.sink < 0.98 {
-            let lift = min(1, pose.hop / 220)
-            let width = 760 * (1 - 0.35 * lift) * (2 - pose.squash) * (1 - pose.sink)
-            var shadow = ctx
-            shadow.opacity = pose.opacity * 0.16 * Double(1 - lift * 0.6)
+            let width = 760 * scale * (1 - pose.sink)
+            var shadow = c
+            shadow.opacity = pose.opacity * 0.16
             shadow.fill(
-                Path(ellipseIn: CGRect(x: feet.x - width / 2, y: baseline - 16, width: width, height: 32)),
+                Path(ellipseIn: CGRect(x: line.x - width / 2, y: line.y - 16 * scale, width: width, height: 32 * scale)),
                 with: .color(.black)
             )
         }
-
-        let travel = baseline - v.minY
-        ctx.translateBy(x: pose.shake, y: pose.sink * travel - pose.hop)
-        ctx.translateBy(x: feet.x, y: feet.y)
-        ctx.rotate(by: .degrees(pose.tiltDegrees))
-        let squash = max(0.05, pose.squash)
-        ctx.scaleBy(x: 1 / sqrt(squash), y: squash)
-        ctx.translateBy(x: -feet.x, y: -feet.y)
-
-        // About 1.5 pt of white edge outside the black shapes at any size.
-        let outline = 3 / scale
-        TypoRenderer.draw(pose.expression, outline: outline, in: &ctx)
+        draw(pose, in: &c, line: line, scale: scale)
     }
 }
