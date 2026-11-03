@@ -25,10 +25,10 @@ final class TypoPerformanceTests: XCTestCase {
         p.begin(at: 10)
         XCTAssertEqual(p.stage, .entering)
         XCTAssertEqual(p.pose(at: 10).sink, 1, accuracy: 0.001, "starts fully hidden behind the bar")
-        XCTAssertLessThan(p.pose(at: 10 + timing.enter * 0.7).sink, Peek.listening, "springs a little higher than its resting peek")
+        XCTAssertLessThan(p.pose(at: 10 + timing.enter * 0.7).sink, Peek.bar.listening, "springs a little higher than its resting peek")
         p.update(level: 0, at: 10 + timing.enter + 0.01)
         XCTAssertEqual(p.stage, .listening)
-        XCTAssertEqual(p.pose(at: 10 + timing.enter + 0.02).sink, Peek.listening, accuracy: 0.001)
+        XCTAssertEqual(p.pose(at: 10 + timing.enter + 0.02).sink, Peek.bar.listening, accuracy: 0.001)
     }
 
     func testMouthFollowsVoice() {
@@ -83,7 +83,7 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertFalse(p.isLoud)
         let settled = p.pose(at: 1.5 + timing.loudRelease + timing.loudRise)
         XCTAssertEqual(settled.expression.spikiness, 0)
-        XCTAssertEqual(settled.sink, Peek.listening, accuracy: 0.001)
+        XCTAssertEqual(settled.sink, Peek.bar.listening, accuracy: 0.001)
     }
 
     func testLongSilenceShowsListeningBubble() {
@@ -106,7 +106,20 @@ final class TypoPerformanceTests: XCTestCase {
         let pose = p.pose(at: 2.5)
         XCTAssertEqual(pose.expression.bubble, .question)
         XCTAssertEqual(pose.expression.mouth, .flat)
-        XCTAssertEqual(pose.sink, Peek.thinking, accuracy: 0.001)
+        XCTAssertEqual(pose.sink, Peek.bar.thinking, accuracy: 0.001)
+    }
+
+    /// Regression: the caret-side Typo used the bar's peek depths, so the
+    /// line it stands on clipped up to half of its body.
+    func testBesideTheCaretTypoStandsFullyOutInEveryCalmState() {
+        var p = TypoPerformance(timing: timing, peek: .caret)
+        p.begin(at: 0)
+        p.update(level: 0, at: 1)
+        XCTAssertEqual(p.pose(at: 1).sink, 0, accuracy: 0.001, "listening")
+        p.think(at: 2)
+        XCTAssertEqual(p.pose(at: 2.5).sink, 0, accuracy: 0.001, "thinking")
+        p.react(.done, at: 3)
+        XCTAssertEqual(p.pose(at: 3.5).sink, 0, accuracy: 0.001, "reacting")
     }
 
     func testThinkIsIgnoredWhileHidden() {
@@ -123,7 +136,7 @@ final class TypoPerformanceTests: XCTestCase {
         let startled = p.pose(at: 2.6).expression
         XCTAssertEqual(startled.bubble, .interrobang)
         XCTAssertTrue(startled.sweat)
-        XCTAssertEqual(p.pose(at: 2.6).sink, Peek.reacting, accuracy: 0.001)
+        XCTAssertEqual(p.pose(at: 2.6).sink, Peek.bar.reacting, accuracy: 0.001)
     }
 
     func testSuccessHopsPressesLikeAKeyAndSinksWithinTheBarsExit() {
@@ -151,7 +164,7 @@ final class TypoPerformanceTests: XCTestCase {
         let offset = CGSize(width: 3000, height: 400)
         p.finish(.leap(offset), at: 5)
         let crouch = p.pose(at: 5 + timing.leapCrouch * 0.9)
-        XCTAssertLessThan(crouch.sink, TypoPerformance.Peek.listening, "rises out of the line before take-off")
+        XCTAssertLessThan(crouch.sink, TypoPerformance.Peek.bar.listening, "rises out of the line before take-off")
 
         let midAir = p.pose(at: 5 + timing.leapCrouch + timing.leapAir / 2)
         XCTAssertGreaterThan(midAir.hop, 300)
@@ -220,7 +233,7 @@ final class TypoPerformanceTests: XCTestCase {
         var p = TypoPerformance(reduceMotion: true)
         p.begin(at: 0)
         let entering = p.pose(at: timing.enter / 2)
-        XCTAssertEqual(entering.sink, Peek.listening, accuracy: 0.001)
+        XCTAssertEqual(entering.sink, Peek.bar.listening, accuracy: 0.001)
         XCTAssertEqual(entering.opacity, 0.5, accuracy: 0.01)
 
         p.update(level: 0.9, at: timing.enter + 0.01)

@@ -65,11 +65,16 @@ struct TypoPerformance: Equatable {
         var leapTotal: TimeInterval { leapCrouch + leapAir + leapPress + leapRebound + leapSink }
     }
 
-    /// How deep Typo sits behind the capsule edge in each calm state.
-    enum Peek {
-        static let listening: CGFloat = 0.3
-        static let thinking: CGFloat = 0.42
-        static let reacting: CGFloat = 0.22
+    /// How deep Typo sits below the edge it stands on in each calm state.
+    struct Peek: Equatable {
+        var listening: CGFloat
+        var thinking: CGFloat
+        var reacting: CGFloat
+
+        /// Behind the recording bar's capsule, only the head shows.
+        static let bar = Peek(listening: 0.3, thinking: 0.42, reacting: 0.22)
+        /// Beside the caret nothing covers Typo, so it stands fully out of the line.
+        static let caret = Peek(listening: 0, thinking: 0, reacting: 0)
     }
 
     // The meter maps -50...0 dBFS onto 0...1 (AudioCaptureEngine.calculateLevel).
@@ -83,6 +88,7 @@ struct TypoPerformance: Equatable {
     static let quietLevel: Float = 0.25
 
     var timing = Timing.standard
+    var peek = Peek.bar
     var reduceMotion = false
     private(set) var stage: Stage = .hidden
     private(set) var stageStart: TimeInterval = 0
@@ -93,11 +99,13 @@ struct TypoPerformance: Equatable {
     private var calmSince: TimeInterval?
     private var quietSince: TimeInterval?
     /// Where the exit started from, so the sink never jumps.
-    private var exitFromSink: CGFloat = Peek.listening
+    private var exitFromSink: CGFloat
 
-    init(timing: Timing = .standard, reduceMotion: Bool = false) {
+    init(timing: Timing = .standard, peek: Peek = .bar, reduceMotion: Bool = false) {
         self.timing = timing
+        self.peek = peek
         self.reduceMotion = reduceMotion
+        exitFromSink = peek.listening
     }
 
     var isVisible: Bool { stage != .hidden }
@@ -261,15 +269,15 @@ struct TypoPerformance: Equatable {
             let p = min(1, age / timing.enter)
             pose.expression = listeningFace(at: t)
             if reduceMotion {
-                pose.sink = Peek.listening
+                pose.sink = peek.listening
                 pose.opacity = p
             } else {
-                pose.sink = 1 - (1 - Peek.listening) * Self.easeOutBack(p)
+                pose.sink = 1 - (1 - peek.listening) * Self.easeOutBack(p)
             }
         case .listening:
             pose.expression = listeningFace(at: t)
             let shift = reduceMotion ? 1 : CGFloat(min(1, (t - loudChangedAt) / timing.loudRise))
-            pose.sink = isLoud ? Peek.listening * (1 - shift) : Peek.listening * shift
+            pose.sink = isLoud ? peek.listening * (1 - shift) : peek.listening * shift
             if isLoud {
                 pose.expression = Self.bristled
                 pose.shake = reduceMotion ? 0 : CGFloat(sin(t * 70)) * 9
@@ -278,7 +286,7 @@ struct TypoPerformance: Equatable {
                 pose.hop = CGFloat(abs(sin(t * .pi * 2.4))) * 14 * CGFloat(min(1, voice * 2))
             }
         case .thinking:
-            pose.sink = Peek.thinking
+            pose.sink = peek.thinking
             var e = TypoExpression()
             e.look = CGSize(width: -18, height: -26)
             e.mouth = .flat
@@ -287,7 +295,7 @@ struct TypoPerformance: Equatable {
             pose.expression = e
             pose.tiltDegrees = reduceMotion ? 0 : sin(t * 1.7) * 2.5
         case .reacting(let reaction):
-            pose.sink = Peek.reacting
+            pose.sink = peek.reacting
             pose.expression = Self.face(for: reaction)
         case .exiting(let exit):
             pose = exitPose(exit, age: age)

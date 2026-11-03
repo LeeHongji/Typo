@@ -42,6 +42,50 @@ final class CaretLocatorTests: XCTestCase {
         XCTAssertEqual(rect, CGRect(x: 118, y: 300, width: 1, height: 17))
         XCTAssertNil(CaretLocator.collapsedCaret(direct: nil, characterBefore: nil))
     }
+
+    /// Regression: TextEdit reports a collapsed caret at the end of the text
+    /// one line too high (y 137) while the character before it is on the
+    /// caret's real line (y 150); Typo stood on the line above.
+    func testCollapsedCaretTrustsThePreviousCharacterWhenTheyAgreeOnX() {
+        let rect = CaretLocator.collapsedCaret(
+            direct: CGRect(x: 363.19, y: 137, width: 0, height: 13),
+            characterBefore: CGRect(x: 356.56, y: 150, width: 6.63, height: 13)
+        )
+        XCTAssertEqual(rect?.minY, 150)
+        XCTAssertEqual(rect!.minX, 363.19, accuracy: 0.01)
+    }
+
+    func testCollapsedCaretAfterALineBreakKeepsTheDirectRect() {
+        let rect = CaretLocator.collapsedCaret(
+            direct: CGRect(x: 191, y: 163, width: 0, height: 13),
+            characterBefore: CGRect(x: 356, y: 150, width: 7, height: 13)
+        )
+        XCTAssertEqual(rect, CGRect(x: 191, y: 163, width: 1, height: 13))
+    }
+
+    func testCaretAtTheStartUsesTheCharacterAfterIt() {
+        let rect = CaretLocator.collapsedCaret(
+            direct: CGRect(x: 0, y: 0, width: 0, height: 0),
+            characterBefore: nil,
+            characterAfter: CGRect(x: 322, y: 192, width: 8, height: 15)
+        )
+        XCTAssertEqual(rect, CGRect(x: 322, y: 192, width: 1, height: 15))
+    }
+
+    /// Regression: an empty Codex box reports its whole frame as the caret
+    /// range, and an empty Chrome textarea reports nothing; the caret is at
+    /// the start of the box, not at its right edge.
+    func testEmptyBoxCaretSitsAtItsStart() {
+        let codex = CaretLocator.fieldStartCaret(frame: CGRect(x: 381, y: 803, width: 453, height: 60))!
+        XCTAssertEqual(codex.minX, 381, accuracy: 8)
+        XCTAssertEqual(codex.minY, 806, accuracy: 8)
+        let chrome = CaretLocator.fieldStartCaret(frame: CGRect(x: 309, y: 179, width: 444, height: 119))!
+        XCTAssertEqual(chrome.minX, 322, accuracy: 8)
+        XCTAssertEqual(chrome.minY, 192, accuracy: 8)
+        let oneLine = CaretLocator.fieldStartCaret(frame: CGRect(x: 100, y: 100, width: 300, height: 22))!
+        XCTAssertEqual(oneLine.midY, 111, accuracy: 0.01, "a one-line box centres the caret")
+        XCTAssertNil(CaretLocator.fieldStartCaret(frame: CGRect(x: 0, y: 0, width: 1400, height: 900)), "a whole window is not a box")
+    }
 }
 
 final class TypoCaretLayoutTests: XCTestCase {

@@ -115,7 +115,7 @@ final class TypoCaretStage {
     private let state: AppState
     private let placement: TypoPlacement
     private let model = TypoCaretModel()
-    private var performance = TypoPerformance()
+    private var performance = TypoPerformance(peek: .caret)
     private var panel: TypoCaretPanel?
     private var timer: Timer?
     private var session = 0
@@ -180,7 +180,13 @@ final class TypoCaretStage {
         let pid = app.processIdentifier
         let bundle = app.bundleIdentifier ?? "unknown"
         Task { [weak self] in
-            let lookup = await CaretLocator.locate(processIdentifier: pid)
+            var lookup = await CaretLocator.locate(processIdentifier: pid, trace: true)
+            if lookup == .unavailable("no focused element") {
+                // The first query after waking Chromium's accessibility tree
+                // often comes back empty; the tree is ready a moment later.
+                try? await Task.sleep(for: .milliseconds(350))
+                lookup = await CaretLocator.locate(processIdentifier: pid, trace: true)
+            }
             guard let self, self.session == session else { return }
             self.decide(lookup, bundle: bundle)
         }
@@ -207,7 +213,14 @@ final class TypoCaretStage {
         bodyHeight = TypoCaretLayout.bodyHeight(forCaretHeight: found.rect.height)
         feet = TypoCaretLayout.feet(beside: found.rect, bodyHeight: bodyHeight, screen: screen.visibleFrame)
         placePanel(feet: [feet])
-        performance = TypoPerformance(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        if let frame = panel?.frame {
+            DebugFileLogger.log(
+                "typo caret: placed feet=\(Int(feet.x)),\(Int(feet.y)) body=\(Int(bodyHeight)) "
+                    + "panel=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height)) "
+                    + "screen=\(Int(screen.frame.minX)),\(Int(screen.frame.minY)),\(Int(screen.frame.width))x\(Int(screen.frame.height))"
+            )
+        }
+        performance = TypoPerformance(peek: .caret, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         performance.begin(at: CACurrentMediaTime())
         placement.mode = .caret
         lastFollow = CACurrentMediaTime()
@@ -234,7 +247,7 @@ final class TypoCaretStage {
     private static func caretAfterPaste(start: CaretLocation) async -> CaretLocation? {
         for attempt in 0..<3 {
             if attempt > 0 { try? await Task.sleep(for: .milliseconds(60)) }
-            let lookup = await CaretLocator.locate(processIdentifier: start.processIdentifier)
+            let lookup = await CaretLocator.locate(processIdentifier: start.processIdentifier, trace: attempt == 0)
             let frontmost = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
             if let target = TypoCaretLayout.leapTarget(start: start, after: lookup.location, frontmost: frontmost) {
                 return target
