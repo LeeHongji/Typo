@@ -27,6 +27,10 @@ struct TypoPerformance: Equatable {
     enum Exit: Equatable {
         /// Text landed: a small hop, a key-like press, then down behind the bar.
         case success
+        /// Text landed somewhere else on screen: Typo flips over to `offset`
+        /// (design units from where it stands), presses down like a key, springs
+        /// back and sinks into that line.
+        case leap(CGSize)
         /// The user cancelled: a sad sink.
         case cancelled
         /// The bar is leaving after an error: a startled sink.
@@ -46,6 +50,11 @@ struct TypoPerformance: Equatable {
         var successHop: TimeInterval = 0.08
         var successPress: TimeInterval = 0.1
         var successSink: TimeInterval = 0.14
+        var leapCrouch: TimeInterval = 0.08
+        var leapAir: TimeInterval = 0.42
+        var leapPress: TimeInterval = 0.12
+        var leapRebound: TimeInterval = 0.16
+        var leapSink: TimeInterval = 0.2
         var cancelSink: TimeInterval = 0.28
         var failSink: TimeInterval = 0.24
         var reducedMotionFade: TimeInterval = 0.2
@@ -53,6 +62,7 @@ struct TypoPerformance: Equatable {
         static let standard = Timing()
 
         var successTotal: TimeInterval { successHop + successPress + successSink }
+        var leapTotal: TimeInterval { leapCrouch + leapAir + leapPress + leapRebound + leapSink }
     }
 
     /// How deep Typo sits behind the capsule edge in each calm state.
@@ -172,6 +182,7 @@ struct TypoPerformance: Equatable {
         if reduceMotion { return timing.reducedMotionFade }
         switch exit {
         case .success: return timing.successTotal
+        case .leap: return timing.leapTotal
         case .cancelled: return timing.cancelSink
         case .failed: return timing.failSink
         }
@@ -232,6 +243,10 @@ struct TypoPerformance: Equatable {
         var squash: CGFloat = 1
         /// Horizontal jitter in design units.
         var shake: CGFloat = 0
+        /// Displacement from where Typo stands, in design units, while it leaps.
+        var travel: CGSize = .zero
+        /// Rotation about the middle of the body, for the somersault.
+        var spinDegrees: Double = 0
         var tiltDegrees: Double = 0
         var opacity: Double = 1
     }
@@ -373,6 +388,8 @@ struct TypoPerformance: Equatable {
                 pose.squash = 0.7 + 0.3 * CGFloat(p)
                 pose.sink = sinkFrom(exitFromSink, progress: p)
             }
+        case .leap(let offset):
+            pose = leapPose(to: offset, age: age, from: exitFromSink)
         case .cancelled:
             pose.expression = exitFace(exit)
             pose.sink = sinkFrom(exitFromSink, progress: min(1, age / tm.cancelSink))
@@ -383,9 +400,70 @@ struct TypoPerformance: Equatable {
         return pose
     }
 
+    /// The leap from the video: crouch, a somersault along an arc to the new
+    /// line, a key-like press on landing, a springy rebound, then down into the line.
+    private func leapPose(to offset: CGSize, age: TimeInterval, from startSink: CGFloat) -> Pose {
+        let tm = timing
+        var pose = Pose()
+        var happy = TypoExpression()
+        happy.eyeL = .happy
+        happy.eyeR = .happy
+        happy.mouth = .grin
+        happy.armL = .init(up: true, degrees: -18)
+        happy.armR = .init(up: true, degrees: 60)
+
+        let airStart = tm.leapCrouch
+        let landAt = airStart + tm.leapAir
+        let reboundAt = landAt + tm.leapPress
+        let sinkAt = reboundAt + tm.leapRebound
+        if age < airStart {
+            let p = age / tm.leapCrouch
+            pose.expression = happy
+            pose.sink = startSink * CGFloat(1 - p)
+            pose.squash = 1 - 0.15 * CGFloat(sin(p * .pi / 2))
+        } else if age < landAt {
+            let p = (age - airStart) / tm.leapAir
+            let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            pose.expression = happy
+            pose.sink = 0
+            pose.travel = CGSize(width: offset.width * CGFloat(eased), height: offset.height * CGFloat(eased))
+            let arc = max(420, abs(offset.height) * 0.6 + 380)
+            pose.hop = CGFloat(sin(p * .pi)) * arc
+            pose.spinDegrees = 360 * eased
+            pose.squash = 1 + 0.06 * CGFloat(sin(p * .pi))
+        } else if age < reboundAt {
+            let p = (age - landAt) / tm.leapPress
+            var pressed = TypoExpression()
+            pressed.eyeL = .chevron
+            pressed.eyeR = .chevron
+            pressed.mouth = .zigzag
+            pressed.armL = happy.armL
+            pressed.armR = happy.armR
+            pressed.impact = true
+            pose.expression = pressed
+            pose.sink = 0
+            pose.travel = offset
+            pose.squash = 1 - 0.3 * CGFloat(sin(p * .pi / 2))
+        } else if age < sinkAt {
+            let p = (age - reboundAt) / tm.leapRebound
+            happy.mouth = .smile
+            pose.expression = happy
+            pose.sink = 0
+            pose.travel = offset
+            pose.squash = 0.7 + 0.42 * CGFloat(sin(p * .pi / 2)) - 0.12 * CGFloat(p)
+        } else {
+            let p = min(1, (age - sinkAt) / tm.leapSink)
+            happy.mouth = .smile
+            pose.expression = happy
+            pose.travel = offset
+            pose.sink = CGFloat(p * p)
+        }
+        return pose
+    }
+
     private func exitFace(_ exit: Exit) -> TypoExpression {
         switch exit {
-        case .success:
+        case .success, .leap:
             return Self.face(for: .done)
         case .failed:
             return Self.face(for: .failed)

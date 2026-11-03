@@ -146,6 +146,44 @@ final class TypoPerformanceTests: XCTestCase {
         XCTAssertEqual(p.stage, .hidden)
     }
 
+    func testLeapFlipsAcrossToTheNewLinePressesAndSinksThere() {
+        var p = listening()
+        let offset = CGSize(width: 3000, height: 400)
+        p.finish(.leap(offset), at: 5)
+        let crouch = p.pose(at: 5 + timing.leapCrouch * 0.9)
+        XCTAssertLessThan(crouch.sink, TypoPerformance.Peek.listening, "rises out of the line before take-off")
+
+        let midAir = p.pose(at: 5 + timing.leapCrouch + timing.leapAir / 2)
+        XCTAssertGreaterThan(midAir.hop, 300)
+        XCTAssertEqual(midAir.spinDegrees, 180, accuracy: 1, "halfway through the somersault")
+        XCTAssertEqual(midAir.travel.width, 1500, accuracy: 1)
+
+        let landed = timing.leapCrouch + timing.leapAir
+        let press = p.pose(at: 5 + landed + timing.leapPress * 0.95)
+        XCTAssertEqual(press.travel, offset)
+        XCTAssertEqual(press.expression.eyeL, .chevron)
+        XCTAssertLessThan(press.squash, 0.8)
+        XCTAssertEqual(press.hop, 0)
+
+        let sinking = p.pose(at: 5 + timing.leapTotal - 0.01)
+        XCTAssertEqual(sinking.travel, offset, "sinks into the new line, not the old one")
+        XCTAssertGreaterThan(sinking.sink, 0.85)
+        p.update(level: 0, at: 5 + timing.leapTotal)
+        XCTAssertEqual(p.stage, .hidden)
+        XCTAssertLessThan(timing.leapTotal, 1.1, "matches the video's roughly one-second landing")
+    }
+
+    func testReducedMotionLeapFadesInPlace() {
+        var p = TypoPerformance(reduceMotion: true)
+        p.begin(at: 0)
+        p.update(level: 0, at: timing.enter + 0.01)
+        p.finish(.leap(CGSize(width: 3000, height: 0)), at: 2)
+        let pose = p.pose(at: 2 + timing.reducedMotionFade / 2)
+        XCTAssertEqual(pose.travel, .zero)
+        XCTAssertEqual(pose.spinDegrees, 0)
+        XCTAssertEqual(pose.opacity, 0.5, accuracy: 0.01)
+    }
+
     func testExitStartsFromWhereverTypoWas() {
         var p = listening()
         p.update(level: 0.9, at: 1.0)

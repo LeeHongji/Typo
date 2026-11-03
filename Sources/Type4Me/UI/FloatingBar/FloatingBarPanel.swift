@@ -156,6 +156,8 @@ final class FloatingBarController {
     var dragLifecycle = FloatingBarDragLifecycle()
     private var isSelfOriginatedPlacementChange = false
     private var guideWindow: FloatingBarPlacementGuideWindow?
+    /// Puts Typo beside the text caret when it can be found.
+    private lazy var caretTypo = TypoCaretStage(state: state)
 
     private struct DragSession {
         var grabOffset: CGVector
@@ -254,6 +256,7 @@ final class FloatingBarController {
 
     func show() {
         guard !isSuppressedForManualInput else { return }
+        caretTypo.barWillShow()
         let wasHiding = isHiding
         isHiding = false
         _ = dragLifecycle.showRequested()
@@ -312,6 +315,7 @@ final class FloatingBarController {
     }
 
     func hide(style: FloatingBarHideStyle = .standard) {
+        caretTypo.barWillHide(style: style)
         let action = dragLifecycle.hideRequested()
         chrome.isRetainedForDrag = dragLifecycle.isRetainedForDrag
         if action == .retainForDrag {

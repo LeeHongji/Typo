@@ -960,7 +960,9 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .animation(.easeInOut(duration: 0.15), value: presentedPhase)
             }
             .overlay(alignment: .topLeading) {
-                if showsTypo {
+                // Only one Typo at a time: the bar's stays away while Typo
+                // stands beside the caret or the caret lookup is still running.
+                if showsTypo && TypoPlacement.shared.mode == .bar {
                     TypoBuddyView(
                         cue: typoCue,
                         meter: state.audioLevel,

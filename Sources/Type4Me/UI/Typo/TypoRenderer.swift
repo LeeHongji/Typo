@@ -110,10 +110,13 @@ enum TypoRenderer {
 
     /// Draws one expression in design units. `outline` is the width, in design
     /// units, of the white sticker edge that keeps Typo legible on dark windows.
-    static func draw(_ e: TypoExpression, outline: CGFloat, in ctx: inout GraphicsContext) {
+    /// `minimumLine` thickens the thin features (arms, mouth, eye strokes) to at
+    /// least that width, so a small Typo still shows its hands and mouth.
+    static func draw(_ e: TypoExpression, outline: CGFloat, minimumLine: CGFloat = 0, in ctx: inout GraphicsContext) {
         let ink = GraphicsContext.Shading.color(G.ink)
         let paper = GraphicsContext.Shading.color(G.paper)
-        let edge = StrokeStyle(lineWidth: outline, lineCap: .round, lineJoin: .round)
+        let boost = max(0, minimumLine - G.line)
+        let edge = StrokeStyle(lineWidth: outline + boost, lineCap: .round, lineJoin: .round)
 
         let bodyPath = e.spikiness > 0.01 ? spikyBody(e.spikiness) : body
         let armPathL = arm(armL, pivot: G.armLPivot, pose: e.armL)
@@ -134,22 +137,27 @@ enum TypoRenderer {
             b.fill(bubble, with: ink)
             if let glyph = e.bubble { drawGlyph(glyph, in: &b) }
         }
-        if e.shout { drawShoutLines(outline: outline, in: &ctx) }
+        if e.shout { drawShoutLines(outline: outline, boost: boost, in: &ctx) }
         if e.sweat { drawSweat(in: &ctx) }
 
         ctx.fill(armPathL, with: ink)
         ctx.fill(armPathR, with: ink)
+        if boost > 0 {
+            let thicker = StrokeStyle(lineWidth: boost, lineCap: .round, lineJoin: .round)
+            ctx.stroke(armPathL, with: ink, style: thicker)
+            ctx.stroke(armPathR, with: ink, style: thicker)
+        }
         ctx.fill(bodyPath, with: ink)
         ctx.fill(face, with: paper)
 
         var f = ctx
         f.clip(to: face)
-        drawEye(e.eyeL, center: G.eyeLCenter, traced: eyeL, isLeft: true, look: e.look, in: &f)
-        drawEye(e.eyeR, center: G.eyeRCenter, traced: eyeR, isLeft: false, look: e.look, in: &f)
-        drawMouth(e.mouth, open: e.mouthOpen, in: &f)
-        if e.blush { drawBlush(in: &f) }
+        drawEye(e.eyeL, center: G.eyeLCenter, traced: eyeL, isLeft: true, look: e.look, boost: boost, in: &f)
+        drawEye(e.eyeR, center: G.eyeRCenter, traced: eyeR, isLeft: false, look: e.look, boost: boost, in: &f)
+        drawMouth(e.mouth, open: e.mouthOpen, boost: boost, in: &f)
+        if e.blush { drawBlush(boost: boost, in: &f) }
         if e.tears { drawTears(in: &f) }
-        if e.impact { drawImpact(outline: outline, in: &ctx) }
+        if e.impact { drawImpact(outline: outline, boost: boost, in: &ctx) }
     }
 
     // MARK: - Parts
@@ -162,13 +170,13 @@ enum TypoRenderer {
         return shape.applying(t)
     }
 
-    private static func stroke(_ path: Path, _ ctx: inout GraphicsContext, width: CGFloat = G.line) {
-        ctx.stroke(path, with: .color(G.ink), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+    private static func stroke(_ path: Path, _ ctx: inout GraphicsContext, width: CGFloat = G.line, boost: CGFloat = 0) {
+        ctx.stroke(path, with: .color(G.ink), style: StrokeStyle(lineWidth: width + boost, lineCap: .round, lineJoin: .round))
     }
 
     private static func drawEye(
         _ eye: TypoExpression.Eye, center c0: CGPoint, traced: Path,
-        isLeft: Bool, look: CGSize, in ctx: inout GraphicsContext
+        isLeft: Bool, look: CGSize, boost: CGFloat, in ctx: inout GraphicsContext
     ) {
         let c = CGPoint(x: c0.x + look.width, y: c0.y + look.height)
         let ink = GraphicsContext.Shading.color(G.ink)
@@ -181,21 +189,21 @@ enum TypoRenderer {
             var p = Path()
             p.move(to: CGPoint(x: c.x - 44, y: c.y + 30))
             p.addQuadCurve(to: CGPoint(x: c.x + 44, y: c.y + 30), control: CGPoint(x: c.x, y: c.y - 78))
-            stroke(p, &ctx, width: 24)
+            stroke(p, &ctx, width: 24, boost: boost)
         case .relaxed:
             var p = Path()
             p.move(to: CGPoint(x: c.x - 44, y: c.y + 6))
             p.addQuadCurve(to: CGPoint(x: c.x + 44, y: c.y + 6), control: CGPoint(x: c.x, y: c.y + 78))
-            stroke(p, &ctx, width: 24)
+            stroke(p, &ctx, width: 24, boost: boost)
         case .line:
             var p = Path()
             p.move(to: CGPoint(x: c.x - 42, y: c.y + 22))
             p.addLine(to: CGPoint(x: c.x + 42, y: c.y + 18))
-            stroke(p, &ctx, width: 24)
+            stroke(p, &ctx, width: 24, boost: boost)
         case .dot:
             ctx.fill(Path(ellipseIn: CGRect(x: c.x - 26, y: c.y - 14, width: 52, height: 62)), with: ink)
         case .ring:
-            stroke(Path(ellipseIn: CGRect(x: c.x - 50, y: c.y - 52, width: 100, height: 110)), &ctx, width: 20)
+            stroke(Path(ellipseIn: CGRect(x: c.x - 50, y: c.y - 52, width: 100, height: 110)), &ctx, width: 20, boost: boost)
             ctx.fill(Path(ellipseIn: CGRect(x: c.x - 16, y: c.y - 14, width: 32, height: 36)), with: ink)
         case .heart:
             ctx.fill(heart(center: CGPoint(x: c.x, y: c.y + 4), size: 128), with: ink)
@@ -205,7 +213,7 @@ enum TypoRenderer {
             p.move(to: CGPoint(x: c.x - 34 * d, y: c.y - 44))
             p.addLine(to: CGPoint(x: c.x + 36 * d, y: c.y + 4))
             p.addLine(to: CGPoint(x: c.x - 34 * d, y: c.y + 52))
-            stroke(p, &ctx, width: 26)
+            stroke(p, &ctx, width: 26, boost: boost)
         case .angry, .sad:
             // The traced eye with its upper corner sliced off: toward the face
             // centre for anger, away from it for sadness.
@@ -223,12 +231,13 @@ enum TypoRenderer {
         }
     }
 
-    private static func drawMouth(_ kind: TypoExpression.Mouth, open: CGFloat, in ctx: inout GraphicsContext) {
+    private static func drawMouth(_ kind: TypoExpression.Mouth, open: CGFloat, boost: CGFloat, in ctx: inout GraphicsContext) {
         let c = G.mouthCenter
         let ink = GraphicsContext.Shading.color(G.ink)
         switch kind {
         case .smile:
             ctx.fill(mouth, with: ink)
+            if boost > 0 { ctx.stroke(mouth, with: ink, style: StrokeStyle(lineWidth: boost, lineJoin: .round)) }
         case .grin:
             var p = Path()
             p.move(to: CGPoint(x: c.x - 58, y: c.y - 14))
@@ -246,12 +255,12 @@ enum TypoRenderer {
             var p = Path()
             p.move(to: CGPoint(x: c.x - 34, y: c.y + 10))
             p.addLine(to: CGPoint(x: c.x + 34, y: c.y + 6))
-            stroke(p, &ctx)
+            stroke(p, &ctx, boost: boost)
         case .frown:
             var p = Path()
             p.move(to: CGPoint(x: c.x - 38, y: c.y + 26))
             p.addQuadCurve(to: CGPoint(x: c.x + 38, y: c.y + 24), control: CGPoint(x: c.x, y: c.y - 30))
-            stroke(p, &ctx)
+            stroke(p, &ctx, boost: boost)
         case .zigzag:
             var p = Path()
             p.move(to: CGPoint(x: c.x - 52, y: c.y + 12))
@@ -259,15 +268,15 @@ enum TypoRenderer {
             p.addLine(to: CGPoint(x: c.x, y: c.y + 12))
             p.addLine(to: CGPoint(x: c.x + 26, y: c.y - 8))
             p.addLine(to: CGPoint(x: c.x + 52, y: c.y + 12))
-            stroke(p, &ctx)
+            stroke(p, &ctx, boost: boost)
         case .tinyO:
-            stroke(Path(ellipseIn: CGRect(x: c.x - 17, y: c.y - 12, width: 34, height: 40)), &ctx, width: 16)
+            stroke(Path(ellipseIn: CGRect(x: c.x - 17, y: c.y - 12, width: 34, height: 40)), &ctx, width: 16, boost: boost)
         case .cat:
             var p = Path()
             p.move(to: CGPoint(x: c.x - 40, y: c.y - 6))
             p.addQuadCurve(to: CGPoint(x: c.x, y: c.y - 2), control: CGPoint(x: c.x - 22, y: c.y + 40))
             p.addQuadCurve(to: CGPoint(x: c.x + 40, y: c.y - 6), control: CGPoint(x: c.x + 22, y: c.y + 40))
-            stroke(p, &ctx)
+            stroke(p, &ctx, boost: boost)
         }
     }
 
@@ -333,14 +342,14 @@ enum TypoRenderer {
         return p
     }
 
-    private static func drawBlush(in ctx: inout GraphicsContext) {
+    private static func drawBlush(boost: CGFloat, in ctx: inout GraphicsContext) {
         for base in [CGPoint(x: 770, y: 935), CGPoint(x: 1150, y: 940)] {
             for i in 0..<3 {
                 var p = Path()
                 let x = base.x + CGFloat(i) * 26
                 p.move(to: CGPoint(x: x, y: base.y + 18))
                 p.addLine(to: CGPoint(x: x + 16, y: base.y - 16))
-                stroke(p, &ctx, width: 10)
+                stroke(p, &ctx, width: 10, boost: boost)
             }
         }
     }
@@ -367,33 +376,33 @@ enum TypoRenderer {
         ctx.stroke(p, with: .color(G.ink), style: StrokeStyle(lineWidth: 14, lineJoin: .round))
     }
 
-    private static func drawLines(_ lines: [(CGPoint, CGPoint)], width: CGFloat, outline: CGFloat, in ctx: inout GraphicsContext) {
+    private static func drawLines(_ lines: [(CGPoint, CGPoint)], width: CGFloat, outline: CGFloat, boost: CGFloat, in ctx: inout GraphicsContext) {
         for (a, b) in lines {
             var p = Path()
             p.move(to: a)
             p.addLine(to: b)
             if outline > 0 {
-                ctx.stroke(p, with: .color(G.paper), style: StrokeStyle(lineWidth: width + outline, lineCap: .round))
+                ctx.stroke(p, with: .color(G.paper), style: StrokeStyle(lineWidth: width + boost + outline, lineCap: .round))
             }
-            stroke(p, &ctx, width: width)
+            stroke(p, &ctx, width: width, boost: boost)
         }
     }
 
-    private static func drawShoutLines(outline: CGFloat, in ctx: inout GraphicsContext) {
+    private static func drawShoutLines(outline: CGFloat, boost: CGFloat, in ctx: inout GraphicsContext) {
         drawLines([
             (CGPoint(x: 905, y: 520), CGPoint(x: 900, y: 450)),
             (CGPoint(x: 790, y: 535), CGPoint(x: 750, y: 478)),
             (CGPoint(x: 1020, y: 528), CGPoint(x: 1052, y: 465)),
-        ], width: 20, outline: outline, in: &ctx)
+        ], width: 20, outline: outline, boost: boost, in: &ctx)
     }
 
-    private static func drawImpact(outline: CGFloat, in ctx: inout GraphicsContext) {
+    private static func drawImpact(outline: CGFloat, boost: CGFloat, in ctx: inout GraphicsContext) {
         drawLines([
             (CGPoint(x: 455, y: 1270), CGPoint(x: 390, y: 1282)),
             (CGPoint(x: 470, y: 1220), CGPoint(x: 400, y: 1205)),
             (CGPoint(x: 1425, y: 1235), CGPoint(x: 1492, y: 1245)),
             (CGPoint(x: 1420, y: 1190), CGPoint(x: 1488, y: 1172)),
-        ], width: 18, outline: outline, in: &ctx)
+        ], width: 18, outline: outline, boost: boost, in: &ctx)
     }
 
     /// The traced silhouette with alternate even samples pushed outward: the
@@ -450,19 +459,32 @@ extension TypoRenderer {
     /// Draws `pose` with Typo's feet on `line` (view coordinates), `scale`
     /// view points per design unit. The caller decides what hides the part of
     /// Typo below its line.
+    /// Height of Typo's spin centre above its feet, in design units.
+    static let spinCentreHeight: CGFloat = 380
+    /// Thinnest line Typo draws, in points.
+    static let minimumLinePoints: CGFloat = 1.5
+
     static func draw(_ pose: TypoPerformance.Pose, in ctx: inout GraphicsContext, line: CGPoint, scale: CGFloat) {
         guard pose.opacity > 0.001, scale > 0 else { return }
         var c = ctx
         c.opacity = pose.opacity
         c.translateBy(x: line.x, y: line.y)
         c.scaleBy(x: scale, y: scale)
-        c.translateBy(x: pose.shake, y: pose.sink * sinkTravel - pose.hop)
+        c.translateBy(
+            x: pose.travel.width + pose.shake,
+            y: pose.travel.height + pose.sink * sinkTravel - pose.hop
+        )
+        if pose.spinDegrees != 0 {
+            c.translateBy(x: 0, y: -spinCentreHeight)
+            c.rotate(by: .degrees(pose.spinDegrees))
+            c.translateBy(x: 0, y: spinCentreHeight)
+        }
         c.rotate(by: .degrees(pose.tiltDegrees))
         let squash = max(0.05, pose.squash)
         c.scaleBy(x: 1 / sqrt(squash), y: squash)
         c.translateBy(x: -feetAnchor.x, y: -feetAnchor.y)
         // About 1.5 pt of white edge outside the black shapes at any size.
-        draw(pose.expression, outline: 3 / scale, in: &c)
+        draw(pose.expression, outline: 3 / scale, minimumLine: minimumLinePoints / scale, in: &c)
     }
 
     /// Draws a pose standing on a plain line across a view of `size`, with a
