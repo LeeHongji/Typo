@@ -48,35 +48,48 @@ enum CaretLocator {
     static let caretHeights: ClosedRange<CGFloat> = 2...160
     static let maximumCaretWidth: CGFloat = 60
 
-    private static let nudged = OSAllocatedUnfairLock(initialState: Set<pid_t>())
+    static let timedOut = CaretLookup.unavailable("timed out")
+    static let noFocusedElement = CaretLookup.unavailable("no focused element")
 
-    /// Looks up the caret off the main thread, giving up after `budget`.
+    private static let nudged = OSAllocatedUnfairLock(initialState: Set<pid_t>())
+    /// AX calls are blocking IPC; they run here, one at a time, never on the
+    /// main thread or Swift's cooperative pool.
+    private static let queue = DispatchQueue(label: "com.type4me.caret-locator", qos: .userInitiated)
+
+    /// Looks up the caret, answering `timedOut` after `budget` seconds even
+    /// when the app is still busy answering.
     static func locate(
         processIdentifier pid: pid_t,
-        budget: Duration = .milliseconds(300),
+        budget: TimeInterval = 0.5,
         trace: Bool = false
     ) async -> CaretLookup {
         guard AXIsProcessTrusted() else { return .unavailable("not trusted") }
         let screens = NSScreen.screens.map(\.frame)
         let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
-        return await withTaskGroup(of: CaretLookup?.self) { group in
-            group.addTask {
-                query(pid: pid, screens: screens, primaryMaxY: primaryMaxY, trace: trace)
+        return await withCheckedContinuation { continuation in
+            let answered = OSAllocatedUnfairLock(initialState: false)
+            let answer: @Sendable (CaretLookup) -> Void = { lookup in
+                let first = answered.withLock { done in
+                    defer { done = true }
+                    return !done
+                }
+                if first { continuation.resume(returning: lookup) }
             }
-            group.addTask {
-                try? await Task.sleep(for: budget)
-                return nil
+            queue.async {
+                answer(query(pid: pid, screens: screens, primaryMaxY: primaryMaxY, trace: trace))
             }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? .unavailable("timed out")
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + budget) {
+                answer(timedOut)
+            }
         }
     }
 
     /// The synchronous lookup; AX calls are IPC, so callers keep it off the main thread.
     static func query(pid: pid_t, screens: [CGRect], primaryMaxY: CGFloat, trace: Bool = false) -> CaretLookup {
         let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.1)
+        // Most apps answer in about 50 ms; Electron apps right after they come
+        // forward or open a file can take a few hundred.
+        AXUIElementSetMessagingTimeout(app, 0.25)
         let justNudged = nudgeChromiumIfNeeded(app, pid: pid)
 
         var focused = copyElement(app, kAXFocusedUIElementAttribute)
@@ -88,15 +101,13 @@ enum CaretLocator {
             focused = copyElement(app, kAXFocusedUIElementAttribute)
             retries -= 1
         }
-        guard var element = focused else { return .unavailable("no focused element") }
-        AXUIElementSetMessagingTimeout(element, 0.1)
+        guard var element = focused else { return noFocusedElement }
+        AXUIElementSetMessagingTimeout(element, 0.15)
 
         let role = copyString(element, kAXRoleAttribute) ?? ""
-        let subrole = copyString(element, kAXSubroleAttribute) ?? ""
-        if role == "AXSecureTextField" || subrole == (kAXSecureTextFieldSubrole as String) {
-            return .secureField
-        }
+        if isSecure(element) { return .secureField }
         if !hasCaret(element), let leaf = descendToTextLeaf(from: element) {
+            if isSecure(leaf) { return .secureField }
             element = leaf
         }
 
@@ -112,7 +123,7 @@ enum CaretLocator {
             }
         }
         if textRoles.contains(role) || textRoles.contains(copyString(element, kAXRoleAttribute) ?? ""),
-           selectionLocation(element) == 0,
+           isCollapsedAtStart(element),
            let box = frame(element), let axRect = fieldStartCaret(frame: box) {
             let rect = cocoaRect(fromAX: axRect, primaryMaxY: primaryMaxY)
             if isPlausibleCaret(rect, screens: screens) {
@@ -139,23 +150,22 @@ enum CaretLocator {
     }
 
     /// The caret rect for a collapsed selection. Apps often report no width,
-    /// nothing, or (TextEdit at the end of the text) the wrong line for a
-    /// zero-length range. The character just before the caret ends where the
-    /// caret is, so it wins whenever the direct rect is missing or agrees with
-    /// it on x; they disagree right after a line break, where the direct rect
-    /// is the one on the new line. A caret at the start of the text uses the
-    /// character after it.
+    /// nothing, or (TextEdit at the start or end of the text) the line above
+    /// for a zero-length range, while the characters beside the caret are
+    /// right. The character before wins when it ends where the direct rect is
+    /// (or there is no direct rect); otherwise the character after, when it
+    /// starts there, as right after a line break. Only then the direct rect.
     static func collapsedCaret(direct: CGRect?, characterBefore: CGRect?, characterAfter: CGRect? = nil) -> CGRect? {
         let direct = direct.flatMap { $0.height > 0 && ($0.width > 0 || $0.minX > 0) ? $0 : nil }
-        if let before = characterBefore, before.height > 0,
-           direct.map({ abs($0.minX - before.maxX) <= 1.5 }) ?? true {
+        func agrees(_ x: CGFloat) -> Bool { direct.map { abs($0.minX - x) <= 1.5 } ?? true }
+        if let before = characterBefore, before.height > 0, agrees(before.maxX) {
             return CGRect(x: before.maxX, y: before.minY, width: 1, height: before.height)
+        }
+        if let after = characterAfter, after.height > 0, after.width > 0, agrees(after.minX) {
+            return CGRect(x: after.minX, y: after.minY, width: 1, height: after.height)
         }
         if let direct {
             return CGRect(x: direct.minX, y: direct.minY, width: max(1, direct.width), height: direct.height)
-        }
-        if let after = characterAfter, after.height > 0 {
-            return CGRect(x: after.minX, y: after.minY, width: 1, height: after.height)
         }
         return nil
     }
@@ -203,14 +213,20 @@ enum CaretLocator {
         )
     }
 
-    private static func selectionLocation(_ element: AXUIElement) -> Int? {
+    private static func isSecure(_ element: AXUIElement) -> Bool {
+        copyString(element, kAXRoleAttribute) == "AXSecureTextField"
+            || copyString(element, kAXSubroleAttribute) == (kAXSecureTextFieldSubrole as String)
+    }
+
+    /// An empty box has its caret at the start with nothing selected.
+    private static func isCollapsedAtStart(_ element: AXUIElement) -> Bool {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXValueGetTypeID()
-        else { return nil }
+        else { return false }
         var range = CFRange()
-        guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
-        return range.location
+        guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return false }
+        return range.location == 0 && range.length == 0
     }
 
     private static func frame(_ element: AXUIElement) -> CGRect? {
@@ -254,15 +270,19 @@ enum CaretLocator {
         else { return nil }
         var selected = CFRange()
         guard AXValueGetValue(value as! AXValue, .cfRange, &selected) else { return nil }
-        let direct = parameterizedRect(element, kAXBoundsForRangeParameterizedAttribute, value)
-        if selected.length > 0 { return direct }
         func characterRect(at location: Int) -> CGRect? {
             var range = CFRange(location: location, length: 1)
             guard location >= 0, let value = AXValueCreate(.cfRange, &range) else { return nil }
             return parameterizedRect(element, kAXBoundsForRangeParameterizedAttribute, value)
         }
+        if selected.length > 0 {
+            // A selection's bounds span all of it; the caret is at its end.
+            guard let last = characterRect(at: selected.location + selected.length - 1), last.height > 0 else { return nil }
+            return CGRect(x: last.maxX, y: last.minY, width: 1, height: last.height)
+        }
+        let direct = parameterizedRect(element, kAXBoundsForRangeParameterizedAttribute, value)
         let before = selected.location > 0 ? characterRect(at: selected.location - 1) : nil
-        let after = selected.location == 0 ? characterRect(at: 0) : nil
+        let after = characterRect(at: selected.location)
         return collapsedCaret(direct: direct, characterBefore: before, characterAfter: after)
     }
 

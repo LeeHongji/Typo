@@ -3,9 +3,9 @@ import Foundation
 
 /// Typo's performance for one dictation, as a pure function of events and time.
 ///
-/// Typo peeks over the top edge of the recording bar's capsule. `Pose.sink`
-/// says how much of it is hidden behind that edge: 0 stands fully out, 1 is
-/// fully hidden. The bar feeds events and a clock; the performance answers with
+/// Typo stands on an edge: the top of the recording bar's capsule, or the text
+/// line beside the caret. `Pose.sink` says how much of it is hidden below that
+/// edge: 0 stands fully out, 1 is fully hidden. The bar feeds events and a clock; the performance answers with
 /// the pose to draw, so every transition is reproducible in tests.
 struct TypoPerformance: Equatable {
     enum Stage: Equatable {

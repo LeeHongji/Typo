@@ -527,8 +527,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     // MARK: - Typo
 
+    /// Typo on this bar, or about to be (the caret lookup is still running).
+    /// While it stands beside the caret instead, the bar keeps no room for it.
     private var showsTypo: Bool {
-        typoCompanionEnabled && presentedPhase != .hidden
+        typoCompanionEnabled && presentedPhase != .hidden && TypoPlacement.shared.mode != .caret
     }
 
     private var typoMetrics: TypoBuddyMetrics {

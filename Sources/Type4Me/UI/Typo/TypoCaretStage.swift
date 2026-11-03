@@ -181,9 +181,9 @@ final class TypoCaretStage {
         let bundle = app.bundleIdentifier ?? "unknown"
         Task { [weak self] in
             var lookup = await CaretLocator.locate(processIdentifier: pid, trace: true)
-            if lookup == .unavailable("no focused element") {
+            if lookup == CaretLocator.noFocusedElement || lookup == CaretLocator.timedOut {
                 // The first query after waking Chromium's accessibility tree
-                // often comes back empty; the tree is ready a moment later.
+                // often comes back empty or late; the tree is ready a moment later.
                 try? await Task.sleep(for: .milliseconds(350))
                 lookup = await CaretLocator.locate(processIdentifier: pid, trace: true)
             }

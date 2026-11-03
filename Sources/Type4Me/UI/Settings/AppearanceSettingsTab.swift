@@ -670,8 +670,8 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
         settingsToggleRow(
             L("Typo 小键帽", "Typo Keycap"),
             subtitle: L(
-                "开启后，小键帽 Typo 会从录音条后面探出头，陪你说话、思考，输出时按下收回。",
-                "Typo the keycap peeks over the recording bar while you talk and think, then presses down when your text lands."
+                "开启后，小键帽 Typo 会站在你正在输入的光标旁，陪你说话、思考，文字输出后翻到文末按下收回；找不到光标时，它从录音条后面探出头。",
+                "Typo the keycap stands beside your text caret while you talk and think, then flips to the end of the new text and presses down. Where the caret can't be found, it peeks over the recording bar."
             ),
             isOn: $typoCompanionEnabled
         )

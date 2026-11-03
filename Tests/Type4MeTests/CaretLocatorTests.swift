@@ -63,6 +63,18 @@ final class CaretLocatorTests: XCTestCase {
         XCTAssertEqual(rect, CGRect(x: 191, y: 163, width: 1, height: 13))
     }
 
+    /// Regression: at the very start of a TextEdit document the collapsed
+    /// caret is also reported one line too high (y 118); the first character
+    /// is on the real line (y 134).
+    func testCollapsedCaretTrustsTheNextCharacterWhenTheyAgreeOnX() {
+        let rect = CaretLocator.collapsedCaret(
+            direct: CGRect(x: 191, y: 118, width: 0, height: 16),
+            characterBefore: nil,
+            characterAfter: CGRect(x: 191, y: 134, width: 11, height: 16)
+        )
+        XCTAssertEqual(rect, CGRect(x: 191, y: 134, width: 1, height: 16))
+    }
+
     func testCaretAtTheStartUsesTheCharacterAfterIt() {
         let rect = CaretLocator.collapsedCaret(
             direct: CGRect(x: 0, y: 0, width: 0, height: 0),
