@@ -3,14 +3,14 @@ import SwiftUI
 /// One frame of Typo, composed from parts that keep the reference style: a solid
 /// black keycap, a white oval face, solid black features, detached stroke arms,
 /// and a solid black speech bubble carrying a white glyph.
-struct TypoExpression: Equatable {
-    enum Eye: Equatable { case open, happy, relaxed, line, dot, ring, heart, chevron, angry, sad }
-    enum Mouth: Equatable { case smile, grin, talk, shout, flat, frown, zigzag, tinyO, cat }
-    enum Glyph: Equatable { case dots, exclaim, question, interrobang, heart, zz, check, vein, note }
+struct TypoExpression: Hashable {
+    enum Eye: Hashable { case open, happy, relaxed, line, dot, ring, heart, chevron, angry, sad }
+    enum Mouth: Hashable { case smile, grin, talk, shout, flat, frown, zigzag, tinyO, cat }
+    enum Glyph: Hashable { case dots, exclaim, question, interrobang, heart, zz, check, vein, note }
 
     /// An arm is the traced reference stroke, optionally flipped upward about its
     /// shoulder end, then rotated clockwise by `degrees`.
-    struct Arm: Equatable {
+    struct Arm: Hashable {
         var up = false
         var degrees: Double = 0
     }
@@ -116,20 +116,29 @@ enum TypoRenderer {
     private static let mouth = TypoPath.smooth(TypoReference.mouthShape, closed: true)
     private static let bodySamples = evenSamples(of: body, count: 64)
 
+    /// Which layers of the picture to draw: sprites cache the body and the
+    /// bubble separately, so the bubble can fade and swell without redrawing.
+    struct Parts: OptionSet {
+        let rawValue: Int
+        static let body = Parts(rawValue: 1)
+        static let bubble = Parts(rawValue: 2)
+        static let all: Parts = [.body, .bubble]
+    }
+
     /// Draws one expression in design units. `outline` is the width, in design
     /// units, of the white sticker edge that keeps Typo legible on dark windows.
     /// `minimumLine` thickens the thin features (arms, mouth, eye strokes) to at
     /// least that width, so a small Typo still shows its hands and mouth.
-    static func draw(_ e: TypoExpression, outline: CGFloat, minimumLine: CGFloat = 0, in ctx: inout GraphicsContext) {
+    static func draw(
+        _ e: TypoExpression, outline: CGFloat, minimumLine: CGFloat = 0,
+        parts: Parts = .all, in ctx: inout GraphicsContext
+    ) {
         let ink = GraphicsContext.Shading.color(G.ink)
         let paper = GraphicsContext.Shading.color(G.paper)
         let boost = max(0, minimumLine - G.line)
         let edge = StrokeStyle(lineWidth: outline + boost, lineCap: .round, lineJoin: .round)
 
-        let bodyPath = e.spikiness > 0.01 ? spikyBody(e.spikiness) : body
-        let armPathL = arm(armL, pivot: G.armLPivot, pose: e.armL)
-        let armPathR = arm(armR, pivot: G.armRPivot, pose: e.armR)
-
+        let bubblePart = parts.contains(.bubble) && e.bubbleOpacity > 0.01
         var b = ctx
         b.opacity = e.bubbleOpacity
         if e.bubbleScale != 1 {
@@ -137,19 +146,19 @@ enum TypoRenderer {
             b.scaleBy(x: e.bubbleScale, y: e.bubbleScale)
             b.translateBy(x: -G.bubbleTail.x, y: -G.bubbleTail.y)
         }
-        let showsBubble = e.bubbleOpacity > 0.01
-        if outline > 0 {
-            for p in [bodyPath, armPathL, armPathR] { ctx.stroke(p, with: paper, style: edge) }
-            if showsBubble {
-                let bubbleEdge = StrokeStyle(lineWidth: (outline + boost) / e.bubbleScale, lineCap: .round, lineJoin: .round)
-                b.stroke(bubble, with: paper, style: bubbleEdge)
-            }
+        if bubblePart && !parts.contains(.body) {
+            drawBubble(e, outline: outline + boost, in: &b)
+            return
         }
 
-        if showsBubble {
-            b.fill(bubble, with: ink)
-            if let glyph = e.bubble { drawGlyph(glyph, in: &b) }
+        let bodyPath = e.spikiness > 0.01 ? spikyBody(e.spikiness) : body
+        let armPathL = arm(armL, pivot: G.armLPivot, pose: e.armL)
+        let armPathR = arm(armR, pivot: G.armRPivot, pose: e.armR)
+
+        if outline > 0 {
+            for p in [bodyPath, armPathL, armPathR] { ctx.stroke(p, with: paper, style: edge) }
         }
+        if bubblePart { drawBubble(e, outline: outline + boost, in: &b) }
         if e.shout { drawShoutLines(outline: outline, boost: boost, in: &ctx) }
         if e.sweat { drawSweat(in: &ctx) }
 
@@ -175,6 +184,19 @@ enum TypoRenderer {
     }
 
     // MARK: - Parts
+
+    /// The speech bubble with its white edge and glyph. `outline` is in design
+    /// units and is divided by the bubble's own scale, so the edge keeps its width.
+    private static func drawBubble(_ e: TypoExpression, outline: CGFloat, in ctx: inout GraphicsContext) {
+        if outline > 0 {
+            ctx.stroke(
+                bubble, with: .color(G.paper),
+                style: StrokeStyle(lineWidth: outline / e.bubbleScale, lineCap: .round, lineJoin: .round)
+            )
+        }
+        ctx.fill(bubble, with: .color(G.ink))
+        if let glyph = e.bubble { drawGlyph(glyph, in: &ctx) }
+    }
 
     /// A line across the bottom of the keycap, at least 1 pt thick and 2 pt up
     /// (`minimumLine` is 1.5 pt in design units), so it reads at any size and
@@ -491,24 +513,30 @@ extension TypoRenderer {
     /// Thinnest line Typo draws, in points.
     static let minimumLinePoints: CGFloat = 1.5
 
+    /// Where a pose moves Typo, in design units (y down) relative to its feet:
+    /// squash about the feet, a tilt, the somersault about the body's middle,
+    /// then the hop, shake, sink and leap travel.
+    static func motion(of pose: TypoPerformance.Pose) -> CGAffineTransform {
+        var t = CGAffineTransform(
+            translationX: pose.travel.width + pose.shake,
+            y: pose.travel.height + pose.sink * sinkTravel - pose.hop
+        )
+        if pose.spinDegrees != 0 {
+            t = t.translatedBy(x: 0, y: -spinCentreHeight)
+                .rotated(by: pose.spinDegrees * .pi / 180)
+                .translatedBy(x: 0, y: spinCentreHeight)
+        }
+        let squash = max(0.05, pose.squash)
+        return t.rotated(by: pose.tiltDegrees * .pi / 180).scaledBy(x: 1 / sqrt(squash), y: squash)
+    }
+
     static func draw(_ pose: TypoPerformance.Pose, in ctx: inout GraphicsContext, line: CGPoint, scale: CGFloat) {
         guard pose.opacity > 0.001, scale > 0 else { return }
         var c = ctx
         c.opacity = pose.opacity
         c.translateBy(x: line.x, y: line.y)
         c.scaleBy(x: scale, y: scale)
-        c.translateBy(
-            x: pose.travel.width + pose.shake,
-            y: pose.travel.height + pose.sink * sinkTravel - pose.hop
-        )
-        if pose.spinDegrees != 0 {
-            c.translateBy(x: 0, y: -spinCentreHeight)
-            c.rotate(by: .degrees(pose.spinDegrees))
-            c.translateBy(x: 0, y: spinCentreHeight)
-        }
-        c.rotate(by: .degrees(pose.tiltDegrees))
-        let squash = max(0.05, pose.squash)
-        c.scaleBy(x: 1 / sqrt(squash), y: squash)
+        c.concatenate(motion(of: pose))
         c.translateBy(x: -feetAnchor.x, y: -feetAnchor.y)
         // About 1.5 pt of white edge outside the black shapes at any size.
         draw(pose.expression, outline: 3 / scale, minimumLine: minimumLinePoints / scale, in: &c)
@@ -530,29 +558,39 @@ extension TypoRenderer {
     /// Half the shadow's width and height, in design units, when Typo stands still.
     static let shadowRadii = CGSize(width: 370, height: 58)
 
-    /// Draws Typo's soft contact shadow on `line`, following the pose across
-    /// the ground (a leap's travel, a shake) but never into the air. Call it
-    /// before clipping Typo to its line: half of the shadow lies below it.
+    /// Where Typo's soft contact shadow lies, in view points (y down), for Typo
+    /// standing with its feet at `line`: it follows the pose across the ground (a
+    /// leap's travel, a shake) but never into the air, a little below the line
+    /// because Typo covers the upper half.
+    static func shadowEllipse(_ pose: TypoPerformance.Pose, line: CGPoint, scale: CGFloat) -> CGRect {
+        let shadow = TypoShadow(pose)
+        let rx = shadowRadii.width * scale * shadow.width
+        let ry = shadowRadii.height * scale * shadow.width
+        let x = line.x + (pose.travel.width + pose.shake) * scale
+        let y = line.y + pose.travel.height * scale + ry * 0.3
+        return CGRect(x: x - rx, y: y - ry, width: 2 * rx, height: 2 * ry)
+    }
+
+    /// The shadow's falloff, from its centre to its edge, at `TypoShadow.maxDarkness`.
+    static let shadowStops: [Gradient.Stop] = [
+        .init(color: .black.opacity(0.34 * TypoShadow.maxDarkness), location: 0),
+        .init(color: .black.opacity(0.2 * TypoShadow.maxDarkness), location: 0.5),
+        .init(color: .black.opacity(0), location: 1),
+    ]
+
+    /// Draws the shadow. Call it before clipping Typo to its line: half of the
+    /// shadow lies below it.
     static func drawShadow(_ pose: TypoPerformance.Pose, in ctx: inout GraphicsContext, line: CGPoint, scale: CGFloat) {
         let shadow = TypoShadow(pose)
         guard shadow.darkness > 0.005, scale > 0 else { return }
         var c = ctx
-        let radii = CGSize(width: shadowRadii.width * scale * shadow.width, height: shadowRadii.height * scale * shadow.width)
-        // A little below the line: Typo hides the top half, so most of what shows is under it.
-        c.translateBy(
-            x: line.x + (pose.travel.width + pose.shake) * scale,
-            y: line.y + pose.travel.height * scale + radii.height * 0.3
-        )
-        c.scaleBy(x: radii.width, y: radii.height)
-        let d = Double(shadow.darkness)
-        let gradient = Gradient(stops: [
-            .init(color: .black.opacity(0.34 * d), location: 0),
-            .init(color: .black.opacity(0.2 * d), location: 0.5),
-            .init(color: .black.opacity(0), location: 1),
-        ])
+        c.opacity = Double(shadow.darkness / TypoShadow.maxDarkness)
+        let e = shadowEllipse(pose, line: line, scale: scale)
+        c.translateBy(x: e.midX, y: e.midY)
+        c.scaleBy(x: e.width / 2, y: e.height / 2)
         c.fill(
             Path(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2)),
-            with: .radialGradient(gradient, center: .zero, startRadius: 0, endRadius: 1)
+            with: .radialGradient(Gradient(stops: shadowStops), center: .zero, startRadius: 0, endRadius: 1)
         )
     }
 
@@ -616,11 +654,14 @@ struct TypoShadow: Equatable {
     var width: CGFloat
     var darkness: CGFloat
 
+    /// The largest `darkness`: a Typo pressed flat casts a deeper shadow.
+    static let maxDarkness: CGFloat = 1.35
+
     init(_ pose: TypoPerformance.Pose) {
         let out = min(1, max(0, (1 - pose.sink) / 0.7))
         let lift = min(1, max(0, pose.hop) / 600)
         let squash = max(0.05, pose.squash)
         width = (0.55 + 0.45 * out) * (1 - 0.45 * lift) / sqrt(squash)
-        darkness = out * (1 - 0.6 * lift) * min(1.35, 1 + 0.8 * max(0, 1 - squash)) * CGFloat(pose.opacity)
+        darkness = out * (1 - 0.6 * lift) * min(Self.maxDarkness, 1 + 0.8 * max(0, 1 - squash)) * CGFloat(pose.opacity)
     }
 }

@@ -113,7 +113,8 @@ final class TypoDirector {
 
 /// Typo peeking over the recording bar. The view spans the capsule plus the
 /// room above it; everything inside the capsule's shape is masked, so the part
-/// of Typo below the edge reads as hidden behind the bar.
+/// of Typo below the edge reads as hidden behind the bar. Typo is drawn as
+/// cached sprites moved by Core Animation, not redrawn every frame.
 struct TypoBuddyView: View {
     let cue: TypoBuddyCue
     let meter: AudioLevelMeter
@@ -136,23 +137,18 @@ struct TypoBuddyView: View {
                 reduceMotion: reduceMotion,
                 at: timeline.date.timeIntervalSinceReferenceDate
             )
-            Canvas { ctx, size in
-                let capsule = CGRect(
-                    x: metrics.leadingOverhang,
-                    y: metrics.headroom,
-                    width: capsuleSize.width,
-                    height: capsuleSize.height
-                )
-                var clip = Path(CGRect(origin: .zero, size: size))
-                clip.addPath(Path(roundedRect: capsule, cornerRadius: cornerRadius, style: .continuous))
-                ctx.clip(to: clip, style: FillStyle(eoFill: true))
-                TypoRenderer.draw(
-                    pose,
-                    in: &ctx,
-                    line: CGPoint(x: capsule.minX + metrics.anchorX, y: capsule.minY),
-                    scale: metrics.scale
-                )
-            }
+            let capsule = CGRect(
+                x: metrics.leadingOverhang,
+                y: metrics.headroom,
+                width: capsuleSize.width,
+                height: capsuleSize.height
+            )
+            TypoSpriteLayer(
+                pose: pose,
+                line: CGPoint(x: capsule.minX + metrics.anchorX, y: capsule.minY),
+                scale: metrics.scale,
+                clip: .behind(capsule, cornerRadius: cornerRadius)
+            )
         }
         .frame(
             width: metrics.leadingOverhang + max(metrics.trailingExtent, capsuleSize.width),
@@ -161,5 +157,20 @@ struct TypoBuddyView: View {
         .offset(x: -metrics.leadingOverhang, y: -metrics.headroom)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// Hosts `TypoSpriteView` in SwiftUI.
+struct TypoSpriteLayer: NSViewRepresentable {
+    let pose: TypoPerformance.Pose
+    let line: CGPoint
+    let scale: CGFloat
+    let clip: TypoSpriteView.Clip
+
+    func makeNSView(context: Context) -> TypoSpriteView { TypoSpriteView(frame: .zero) }
+
+    func updateNSView(_ view: TypoSpriteView, context: Context) {
+        view.clip = clip
+        view.update(pose: pose, line: line, scale: scale)
     }
 }

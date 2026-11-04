@@ -21,6 +21,9 @@ struct CaretLocation: Equatable, Sendable {
     /// Where the text after the caret ends on the caret's own line, when
     /// there is any: Typo stands there rather than on top of those words.
     var textEnd: CGFloat?
+    /// The text box holding the caret, when the app reports one: Typo does not
+    /// stand outside it.
+    var field: CGRect?
 }
 
 enum CaretLookup: Equatable, Sendable {
@@ -127,7 +130,8 @@ enum CaretLocator {
                 let lineEnd = rangeLineEnd(element)
                 let end = textEnd(caret: axRect, lineEnd: lineEnd)
                 if trace { DebugFileLogger.log("typo caret probe: lineEnd=\(lineEnd.map { "\($0)" } ?? "nil") textEnd=\(end.map { "\($0)" } ?? "nil")") }
-                return .found(CaretLocation(rect: rect, tier: tier, processIdentifier: pid, textEnd: end))
+                let field = frame(element).map { cocoaRect(fromAX: $0, primaryMaxY: primaryMaxY) }
+                return .found(CaretLocation(rect: rect, tier: tier, processIdentifier: pid, textEnd: end, field: field))
             }
         }
         if textRoles.contains(role) || textRoles.contains(copyString(element, kAXRoleAttribute) ?? ""),
@@ -135,7 +139,10 @@ enum CaretLocator {
            let box = frame(element), let axRect = fieldStartCaret(frame: box) {
             let rect = cocoaRect(fromAX: axRect, primaryMaxY: primaryMaxY)
             if isPlausibleCaret(rect, screens: screens) {
-                return .found(CaretLocation(rect: rect, tier: .fieldStart, processIdentifier: pid))
+                return .found(CaretLocation(
+                    rect: rect, tier: .fieldStart, processIdentifier: pid,
+                    field: cocoaRect(fromAX: box, primaryMaxY: primaryMaxY)
+                ))
             }
         }
         return .unavailable("no plausible caret (role \(role))")

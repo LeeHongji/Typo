@@ -103,6 +103,9 @@ struct TypoPerformance: Equatable {
     private var quietSince: TimeInterval?
     /// Where the exit started from, so the sink never jumps.
     private var exitFromSink: CGFloat
+    /// Where a retargeted leap's destination was when it was retargeted.
+    private var leapFrom: CGSize = .zero
+    private var retargetedAt: TimeInterval = -.infinity
 
     init(timing: Timing = .standard, peek: Peek = .bar, reduceMotion: Bool = false) {
         self.timing = timing
@@ -159,11 +162,26 @@ struct TypoPerformance: Equatable {
         }
     }
 
+    /// How long a leap's destination takes to slide to a retargeted one.
+    static let retargetBlend: TimeInterval = 0.12
+
     /// The landing spot of a leap already under way became known (the app
-    /// reported its new caret late). Only the destination changes, so a
-    /// retarget during the crouch is seamless.
-    mutating func retarget(_ offset: CGSize) {
-        if case .exiting(.leap) = stage { stage = .exiting(.leap(offset)) }
+    /// reported its new caret late). The destination slides to the new one, so
+    /// Typo never jumps, even when the news arrives mid-air.
+    mutating func retarget(_ offset: CGSize, at t: TimeInterval) {
+        guard case .exiting(.leap(let current)) = stage else { return }
+        leapFrom = leapOffset(toward: current, at: t)
+        retargetedAt = t
+        stage = .exiting(.leap(offset))
+    }
+
+    private func leapOffset(toward target: CGSize, at t: TimeInterval) -> CGSize {
+        let p = min(1, max(0, (t - retargetedAt) / Self.retargetBlend))
+        let k = CGFloat(p * p * (3 - 2 * p))
+        return CGSize(
+            width: leapFrom.width + (target.width - leapFrom.width) * k,
+            height: leapFrom.height + (target.height - leapFrom.height) * k
+        )
     }
 
     mutating func finish(_ exit: Exit, at t: TimeInterval) {
@@ -172,6 +190,10 @@ struct TypoPerformance: Equatable {
             return
         case .entering, .listening, .thinking, .reacting:
             exitFromSink = max(0, min(1, pose(at: t).sink))
+            if case .leap(let offset) = exit {
+                leapFrom = offset
+                retargetedAt = -.infinity
+            }
             enter(.exiting(exit), at: t)
             resetVoice()
         }
@@ -420,7 +442,7 @@ struct TypoPerformance: Equatable {
                 pose.sink = sinkFrom(exitFromSink, progress: p)
             }
         case .leap(let offset):
-            pose = leapPose(to: offset, age: age, from: exitFromSink)
+            pose = leapPose(to: leapOffset(toward: offset, at: stageStart + age), age: age, from: exitFromSink)
         case .cancelled:
             pose.expression = exitFace(exit)
             pose.sink = sinkFrom(exitFromSink, progress: min(1, age / tm.cancelSink))

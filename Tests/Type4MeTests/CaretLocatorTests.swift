@@ -160,6 +160,18 @@ final class TypoCaretLayoutTests: XCTestCase {
         XCTAssertEqual(TypoCaretLayout.gaze(feet: feet, caret: caret), 1)
     }
 
+    func testTypoStaysInsideTheTextBox() {
+        let caret = CGRect(x: 300, y: 400, width: 1, height: 18)
+        let box = CGRect(x: 100, y: 300, width: 400, height: 200)
+        let roomy = TypoCaretLayout.feet(beside: caret, textEnd: 340, field: box, bodyHeight: 32, screen: screen)
+        XCTAssertGreaterThan(roomy.x, caret.maxX, "room in the box: after the text")
+        let full = TypoCaretLayout.feet(beside: caret, textEnd: 495, field: box, bodyHeight: 32, screen: screen)
+        XCTAssertLessThan(full.x, caret.minX, "a line to the box's edge: before the caret")
+        XCTAssertGreaterThan(full.x, box.minX)
+        let unknown = TypoCaretLayout.feet(beside: caret, textEnd: 495, field: nil, bodyHeight: 32, screen: screen)
+        XCTAssertGreaterThan(unknown.x, caret.maxX, "no box reported: only the screen limits Typo")
+    }
+
     func testLeapsOnlyWhenTheCaretMovedInTheSameApp() {
         let start = location(x: 300, y: 400)
         let moved = location(x: 520, y: 400)
