@@ -358,3 +358,157 @@ final class TypoBuddyMetricsTests: XCTestCase {
         XCTAssertLessThan(TypoBuddyMetrics.compact.trailingExtent, TF.compactIndicatorWidth)
     }
 }
+
+final class TypoStandingDetailTests: XCTestCase {
+    private let timing = TypoPerformance.Timing.standard
+    private let baseline = TypoGeometry.baselineY
+
+    private func standing(at t: TimeInterval = 0, reduceMotion: Bool = false) -> TypoPerformance {
+        var p = TypoPerformance(peek: .caret, reduceMotion: reduceMotion)
+        p.begin(at: t)
+        p.update(level: 0, at: t + timing.enter + 0.01)
+        return p
+    }
+
+    // MARK: Bottom
+
+    func testTheTracedBottomLeansAcrossTheLine() {
+        let below = TypoReference.body.filter { $0.y > baseline + 10 }
+        XCTAssertFalse(below.isEmpty, "the traced keycap dips below its line, which is what the standing body fixes")
+    }
+
+    func testStandingBodySitsLevelOnItsLine() {
+        let body = TypoRenderer.standingBody(TypoReference.body)
+        XCTAssertTrue(body.allSatisfy { $0.y <= baseline + 0.001 }, "nothing below the line, so clipping never cuts a corner")
+        let onLine = body.filter { abs($0.y - baseline) < 0.001 }.map(\.x)
+        XCTAssertGreaterThan((onLine.max() ?? 0) - (onLine.min() ?? 0), 850, "a level edge across almost the whole keycap")
+        let top = TypoReference.body.filter { $0.y < 1200 }
+        XCTAssertTrue(top.allSatisfy { body.contains($0) }, "the sides and top keep the traced lean")
+    }
+
+    // MARK: Shadow
+
+    func testShadowIsFullUnderAStandingTypo() {
+        let shadow = TypoShadow(standing().pose(at: 1))
+        XCTAssertEqual(shadow.width, 1, accuracy: 0.02)
+        XCTAssertEqual(shadow.darkness, 1, accuracy: 0.001)
+    }
+
+    func testShadowGrowsInAsTypoRisesOutOfTheLine() {
+        var p = TypoPerformance(peek: .caret)
+        p.begin(at: 0)
+        XCTAssertEqual(TypoShadow(p.pose(at: 0)).darkness, 0, accuracy: 0.0001, "no shadow before Typo shows")
+        // Typo springs out quickly, so the shadow is full well before the rise ends.
+        let early = TypoShadow(p.pose(at: timing.enter * 0.05))
+        let late = TypoShadow(p.pose(at: timing.enter * 0.12))
+        XCTAssertGreaterThan(early.darkness, 0)
+        XCTAssertLessThan(early.width, late.width)
+        XCTAssertLessThan(early.darkness, late.darkness)
+    }
+
+    func testShadowShrinksAndFadesAsTypoLeavesTheGround() {
+        var pose = TypoPerformance.Pose(sink: 0)
+        var last = TypoShadow(pose)
+        for hop in stride(from: CGFloat(100), through: 600, by: 100) {
+            pose.hop = hop
+            let shadow = TypoShadow(pose)
+            XCTAssertLessThan(shadow.width, last.width)
+            XCTAssertLessThan(shadow.darkness, last.darkness)
+            last = shadow
+        }
+        XCTAssertEqual(last.width, 0.55, accuracy: 0.001)
+        XCTAssertEqual(last.darkness, 0.4, accuracy: 0.001)
+    }
+
+    func testShadowSpreadsAndDarkensWhenTypoIsPressed() {
+        let pressed = TypoShadow(TypoPerformance.Pose(sink: 0, squash: 0.7))
+        XCTAssertEqual(pressed.width, 1 / sqrt(0.7), accuracy: 0.001)
+        XCTAssertGreaterThan(pressed.darkness, 1.2)
+    }
+
+    func testShadowFadesWithTypo() {
+        XCTAssertEqual(TypoShadow(TypoPerformance.Pose(sink: 0, opacity: 0.5)).darkness, 0.5, accuracy: 0.001)
+    }
+
+    // MARK: Breath
+
+    func testTypoBreathesWhileItWaits() {
+        let p = standing()
+        let squashes = stride(from: 1.0, through: 4.0, by: 0.05).map { p.pose(at: $0).squash }
+        XCTAssertGreaterThan(squashes.max() ?? 0, 1.01)
+        XCTAssertLessThan(squashes.min() ?? 2, 0.99)
+        XCTAssertTrue(squashes.allSatisfy { abs($0 - 1) <= 0.02 }, "a breath, not a bounce")
+    }
+
+    func testBreathCarriesOnFromListeningIntoThinking() {
+        var p = standing()
+        let before = p.pose(at: 2).squash
+        p.think(at: 2)
+        XCTAssertEqual(p.pose(at: 2).squash, before, accuracy: 0.0001)
+    }
+
+    func testReducedMotionTypoHoldsStill() {
+        let p = standing(reduceMotion: true)
+        XCTAssertEqual(p.pose(at: 1.7).squash, 1)
+    }
+
+    // MARK: Gaze
+
+    func testThinkingTypoLooksTowardTheNewText() {
+        var p = standing()
+        p.gaze = -1
+        p.think(at: 2)
+        let look = p.pose(at: 2.5).expression.look
+        XCTAssertLessThan(look.width, 0, "the text appears at the caret, on Typo's left")
+        XCTAssertGreaterThan(look.height, 0, "down at the line")
+    }
+
+    func testThinkingOnTheBarStillPonders() {
+        var p = TypoPerformance()
+        p.begin(at: 0)
+        p.think(at: 1)
+        XCTAssertEqual(p.pose(at: 1.5).expression.look, CGSize(width: -18, height: -26))
+    }
+
+    // MARK: Leap learning its landing late
+
+    func testLeapCanLearnItsLandingDuringTheCrouch() {
+        var p = standing()
+        p.gaze = -1
+        p.finish(.leap(.zero), at: 5)
+        let crouch = p.pose(at: 5 + timing.leapCrouch * 0.5)
+        XCTAssertEqual(crouch.travel, .zero)
+        XCTAssertLessThan(crouch.expression.look.width, 0, "eyes on the new text until the landing is known")
+
+        let offset = CGSize(width: 2000, height: 300)
+        p.retarget(offset)
+        XCTAssertEqual(p.stage, .exiting(.leap(offset)))
+        let midAir = p.pose(at: 5 + timing.leapCrouch + timing.leapAir / 2)
+        XCTAssertEqual(midAir.travel.width, 1000, accuracy: 1)
+        XCTAssertGreaterThan(midAir.expression.look.width, 0, "eyes on the landing spot")
+        XCTAssertEqual(p.pose(at: 5 + timing.leapTotal - 0.01).travel, offset)
+    }
+
+    func testRetargetLeavesOtherStagesAlone() {
+        var p = standing()
+        p.retarget(CGSize(width: 100, height: 0))
+        XCTAssertEqual(p.stage, .listening)
+        p.finish(.success, at: 3)
+        p.retarget(CGSize(width: 100, height: 0))
+        XCTAssertEqual(p.stage, .exiting(.success))
+    }
+
+    func testLeapInPlaceStillSomersaultsAndPresses() {
+        var p = standing()
+        p.finish(.leap(.zero), at: 5)
+        let midAir = p.pose(at: 5 + timing.leapCrouch + timing.leapAir / 2)
+        XCTAssertGreaterThan(midAir.hop, 300)
+        XCTAssertEqual(midAir.travel, .zero)
+        XCTAssertLessThan(p.pose(at: 5 + timing.leapCrouch + timing.leapAir + timing.leapPress * 0.95).squash, 0.8)
+    }
+
+    func testLeapArcClimbsForALongerDrop() {
+        XCTAssertEqual(TypoPerformance.leapArc(for: .zero), 420)
+        XCTAssertGreaterThan(TypoPerformance.leapArc(for: CGSize(width: 0, height: 1000)), 420)
+    }
+}

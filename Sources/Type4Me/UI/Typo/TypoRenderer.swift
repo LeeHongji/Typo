@@ -26,6 +26,8 @@ struct TypoExpression: Equatable {
     var armR = Arm()
     var bubble: Glyph?
     var bubbleOpacity: Double = 0
+    /// Enlarges the bubble about its tail, so the glyph still reads when Typo is small.
+    var bubbleScale: CGFloat = 1
     /// 0 keeps the traced silhouette; 1 is fully bristled.
     var spikiness: CGFloat = 0
     var blush = false
@@ -46,6 +48,12 @@ enum TypoGeometry {
     static let armRPivot = CGPoint(x: 1444, y: 925)
     static let bodyCentroid = CGPoint(x: 936, y: 1003)
     static let bubbleCenter = CGPoint(x: 1618, y: 650)
+    /// The tip of the bubble's tail, which stays put when the bubble grows.
+    static let bubbleTail = CGPoint(x: 1422, y: 762)
+    /// The keycap's lower lip: a thin grey line just above the bottom edge.
+    static let skirt = Color(white: 0.38)
+    static let skirtLift: CGFloat = 56
+    static let skirtLine: CGFloat = 14
     /// The line Typo stands on: the bottom edge of the traced body.
     static let baselineY: CGFloat = 1282
     static let bodyHeight: CGFloat = 728
@@ -98,7 +106,7 @@ enum TypoPath {
 enum TypoRenderer {
     typealias G = TypoGeometry
 
-    private static let body = TypoPath.smooth(TypoReference.body, closed: true)
+    private static let body = TypoPath.smooth(standingBody(TypoReference.body), closed: true)
     private static let face = TypoPath.smooth(TypoReference.faceContour, closed: true)
     private static let bubble = TypoPath.smooth(TypoReference.bubble, closed: true)
     private static let armL = TypoPath.smooth(TypoReference.armLShape, closed: true)
@@ -122,18 +130,23 @@ enum TypoRenderer {
         let armPathL = arm(armL, pivot: G.armLPivot, pose: e.armL)
         let armPathR = arm(armR, pivot: G.armRPivot, pose: e.armR)
 
+        var b = ctx
+        b.opacity = e.bubbleOpacity
+        if e.bubbleScale != 1 {
+            b.translateBy(x: G.bubbleTail.x, y: G.bubbleTail.y)
+            b.scaleBy(x: e.bubbleScale, y: e.bubbleScale)
+            b.translateBy(x: -G.bubbleTail.x, y: -G.bubbleTail.y)
+        }
+        let showsBubble = e.bubbleOpacity > 0.01
         if outline > 0 {
             for p in [bodyPath, armPathL, armPathR] { ctx.stroke(p, with: paper, style: edge) }
-            if e.bubbleOpacity > 0.01 {
-                var b = ctx
-                b.opacity = e.bubbleOpacity
-                b.stroke(bubble, with: paper, style: edge)
+            if showsBubble {
+                let bubbleEdge = StrokeStyle(lineWidth: (outline + boost) / e.bubbleScale, lineCap: .round, lineJoin: .round)
+                b.stroke(bubble, with: paper, style: bubbleEdge)
             }
         }
 
-        if e.bubbleOpacity > 0.01 {
-            var b = ctx
-            b.opacity = e.bubbleOpacity
+        if showsBubble {
             b.fill(bubble, with: ink)
             if let glyph = e.bubble { drawGlyph(glyph, in: &b) }
         }
@@ -148,6 +161,7 @@ enum TypoRenderer {
             ctx.stroke(armPathR, with: ink, style: thicker)
         }
         ctx.fill(bodyPath, with: ink)
+        drawSkirt(clippedTo: bodyPath, minimumLine: minimumLine, in: &ctx)
         ctx.fill(face, with: paper)
 
         var f = ctx
@@ -161,6 +175,19 @@ enum TypoRenderer {
     }
 
     // MARK: - Parts
+
+    /// A line across the bottom of the keycap, at least 1 pt thick and 2 pt up
+    /// (`minimumLine` is 1.5 pt in design units), so it reads at any size and
+    /// closes up when Typo is pressed flat.
+    private static func drawSkirt(clippedTo bodyPath: Path, minimumLine: CGFloat, in ctx: inout GraphicsContext) {
+        let y = G.baselineY - max(G.skirtLift, minimumLine * 4 / 3)
+        var p = Path()
+        p.move(to: CGPoint(x: 300, y: y))
+        p.addLine(to: CGPoint(x: 1700, y: y))
+        var s = ctx
+        s.clip(to: bodyPath)
+        s.stroke(p, with: .color(G.skirt), style: StrokeStyle(lineWidth: max(G.skirtLine, minimumLine * 2 / 3)))
+    }
 
     private static func arm(_ shape: Path, pivot: CGPoint, pose: TypoExpression.Arm) -> Path {
         var t = CGAffineTransform(translationX: pivot.x, y: pivot.y)
@@ -487,24 +514,113 @@ extension TypoRenderer {
         draw(pose.expression, outline: 3 / scale, minimumLine: minimumLinePoints / scale, in: &c)
     }
 
-    /// Draws a pose standing on a plain line across a view of `size`, with a
-    /// soft shadow; used by the design frame renderer.
+    /// Draws a pose standing on a plain line across a view of `size`, with its
+    /// shadow; used by the design frame renderer.
     static func draw(_ pose: TypoPerformance.Pose, in ctx: inout GraphicsContext, size: CGSize) {
         guard pose.opacity > 0.001 else { return }
         let v = TypoGeometry.viewport
         let scale = size.width / v.width
         let line = CGPoint(x: (feetAnchor.x - v.minX) * scale, y: (TypoGeometry.baselineY - v.minY) * scale)
         var c = ctx
+        drawShadow(pose, in: &c, line: line, scale: scale)
         c.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: line.y + 1)))
-        if pose.sink < 0.98 {
-            let width = 760 * scale * (1 - pose.sink)
-            var shadow = c
-            shadow.opacity = pose.opacity * 0.16
-            shadow.fill(
-                Path(ellipseIn: CGRect(x: line.x - width / 2, y: line.y - 16 * scale, width: width, height: 32 * scale)),
-                with: .color(.black)
-            )
-        }
         draw(pose, in: &c, line: line, scale: scale)
+    }
+
+    /// Half the shadow's width and height, in design units, when Typo stands still.
+    static let shadowRadii = CGSize(width: 370, height: 58)
+
+    /// Draws Typo's soft contact shadow on `line`, following the pose across
+    /// the ground (a leap's travel, a shake) but never into the air. Call it
+    /// before clipping Typo to its line: half of the shadow lies below it.
+    static func drawShadow(_ pose: TypoPerformance.Pose, in ctx: inout GraphicsContext, line: CGPoint, scale: CGFloat) {
+        let shadow = TypoShadow(pose)
+        guard shadow.darkness > 0.005, scale > 0 else { return }
+        var c = ctx
+        let radii = CGSize(width: shadowRadii.width * scale * shadow.width, height: shadowRadii.height * scale * shadow.width)
+        // A little below the line: Typo hides the top half, so most of what shows is under it.
+        c.translateBy(
+            x: line.x + (pose.travel.width + pose.shake) * scale,
+            y: line.y + pose.travel.height * scale + radii.height * 0.3
+        )
+        c.scaleBy(x: radii.width, y: radii.height)
+        let d = Double(shadow.darkness)
+        let gradient = Gradient(stops: [
+            .init(color: .black.opacity(0.34 * d), location: 0),
+            .init(color: .black.opacity(0.2 * d), location: 0.5),
+            .init(color: .black.opacity(0), location: 1),
+        ])
+        c.fill(
+            Path(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2)),
+            with: .radialGradient(gradient, center: .zero, startRadius: 0, endRadius: 1)
+        )
+    }
+
+    /// The traced keycap leans about 3°, so its bottom edge crosses the line
+    /// Typo stands on: one corner dips below the line and the other floats
+    /// above it. This replaces the traced bottom (every point lower than
+    /// `band` above `baseline`) with a level edge on `baseline` and two
+    /// matching round corners, extending each side along its own direction.
+    static func standingBody(
+        _ traced: [CGPoint],
+        baseline: CGFloat = TypoGeometry.baselineY,
+        band: CGFloat = 40,
+        radius: CGFloat = 36
+    ) -> [CGPoint] {
+        let n = traced.count
+        let low = Set(traced.indices.filter { traced[$0].y > baseline - band })
+        // The bottom must be one run of points, with two side points on each end.
+        guard !low.isEmpty, low.count <= n - 4,
+              let first = low.first(where: { !low.contains(($0 + n - 1) % n) })
+        else { return traced }
+        let last = (first + low.count - 1) % n
+        guard (0..<low.count).allSatisfy({ low.contains((first + $0) % n) }) else { return traced }
+        func at(_ i: Int) -> CGPoint { traced[(i % n + n) % n] }
+        func onBaseline(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
+            let dy = b.y - a.y
+            guard abs(dy) > 0.001 else { return CGPoint(x: b.x, y: baseline) }
+            return CGPoint(x: a.x + (b.x - a.x) * (baseline - a.y) / dy, y: baseline)
+        }
+        func unit(_ from: CGPoint, _ to: CGPoint) -> CGVector {
+            let l = max(0.001, hypot(to.x - from.x, to.y - from.y))
+            return CGVector(dx: (to.x - from.x) / l, dy: (to.y - from.y) / l)
+        }
+        func corner(_ c: CGPoint, coming u: CGVector, going v: CGVector) -> [CGPoint] {
+            let a = CGPoint(x: c.x - u.dx * radius, y: c.y - u.dy * radius)
+            let b = CGPoint(x: c.x + v.dx * radius, y: c.y + v.dy * radius)
+            return [a] + [0.25, 0.5, 0.75].map { t in
+                let s = 1 - t
+                return CGPoint(x: s * s * a.x + 2 * s * t * c.x + t * t * b.x, y: s * s * a.y + 2 * s * t * c.y + t * t * b.y)
+            } + [b]
+        }
+        let leftCorner = onBaseline(at(first - 2), at(first - 1))
+        let rightCorner = onBaseline(at(last + 2), at(last + 1))
+        let level = unit(leftCorner, rightCorner)
+        let bottom = corner(leftCorner, coming: unit(at(first - 1), leftCorner), going: level)
+            + corner(rightCorner, coming: level, going: unit(rightCorner, at(last + 1)))
+        var out: [CGPoint] = []
+        var i = (last + 1) % n
+        while i != first {
+            out.append(traced[i])
+            i = (i + 1) % n
+        }
+        return out + bottom
+    }
+}
+
+/// How big and how dark Typo's shadow is, as fractions of the shadow under
+/// a Typo standing still on its line. It grows in as Typo rises out of the
+/// line, shrinks and fades as Typo leaves the ground, and spreads and darkens
+/// when Typo is pressed flat.
+struct TypoShadow: Equatable {
+    var width: CGFloat
+    var darkness: CGFloat
+
+    init(_ pose: TypoPerformance.Pose) {
+        let out = min(1, max(0, (1 - pose.sink) / 0.7))
+        let lift = min(1, max(0, pose.hop) / 600)
+        let squash = max(0.05, pose.squash)
+        width = (0.55 + 0.45 * out) * (1 - 0.45 * lift) / sqrt(squash)
+        darkness = out * (1 - 0.6 * lift) * min(1.35, 1 + 0.8 * max(0, 1 - squash)) * CGFloat(pose.opacity)
     }
 }

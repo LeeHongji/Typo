@@ -90,6 +90,9 @@ struct TypoPerformance: Equatable {
     var timing = Timing.standard
     var peek = Peek.bar
     var reduceMotion = false
+    /// Which way the new text will appear from where Typo stands: -1 to its
+    /// left, 1 to its right, 0 unknown. Typo looks there while it thinks.
+    var gaze: CGFloat = 0
     private(set) var stage: Stage = .hidden
     private(set) var stageStart: TimeInterval = 0
     private(set) var isLoud = false
@@ -154,6 +157,13 @@ struct TypoPerformance: Equatable {
         case .reacting, .exiting:
             break
         }
+    }
+
+    /// The landing spot of a leap already under way became known (the app
+    /// reported its new caret late). Only the destination changes, so a
+    /// retarget during the crouch is seamless.
+    mutating func retarget(_ offset: CGSize) {
+        if case .exiting(.leap) = stage { stage = .exiting(.leap(offset)) }
     }
 
     mutating func finish(_ exit: Exit, at t: TimeInterval) {
@@ -273,6 +283,7 @@ struct TypoPerformance: Equatable {
                 pose.opacity = p
             } else {
                 pose.sink = 1 - (1 - peek.listening) * Self.easeOutBack(p)
+                pose.squash = 1 + breath(at: t) * CGFloat(p)
             }
         case .listening:
             pose.expression = listeningFace(at: t)
@@ -284,16 +295,21 @@ struct TypoPerformance: Equatable {
             } else if !reduceMotion {
                 let voice = max(0, level - Self.talkLevel) / (1 - Self.talkLevel)
                 pose.hop = CGFloat(abs(sin(t * .pi * 2.4))) * 14 * CGFloat(min(1, voice * 2))
+                pose.squash = 1 + breath(at: t)
             }
         case .thinking:
             pose.sink = peek.thinking
             var e = TypoExpression()
-            e.look = CGSize(width: -18, height: -26)
+            // Up and away, pondering; or down toward where the text will land.
+            e.look = gaze == 0 ? CGSize(width: -18, height: -26) : CGSize(width: 34 * gaze, height: 14)
             e.mouth = .flat
             e.bubble = .question
             e.bubbleOpacity = min(1, age / 0.18)
             pose.expression = e
-            pose.tiltDegrees = reduceMotion ? 0 : sin(t * 1.7) * 2.5
+            if !reduceMotion {
+                pose.tiltDegrees = sin(t * 1.7) * 2.5
+                pose.squash = 1 + breath(at: t)
+            }
         case .reacting(let reaction):
             pose.sink = peek.reacting
             pose.expression = Self.face(for: reaction)
@@ -301,6 +317,13 @@ struct TypoPerformance: Equatable {
             pose = exitPose(exit, age: age)
         }
         return pose
+    }
+
+    /// A slow breath while Typo waits: about 2% taller and shorter every 3 s.
+    /// It runs on the clock rather than the stage, so it carries on unbroken
+    /// from listening into thinking.
+    private func breath(at t: TimeInterval) -> CGFloat {
+        CGFloat(sin(t * 2 * .pi / 3)) * 0.018
     }
 
     private func listeningFace(at t: TimeInterval) -> TypoExpression {
@@ -424,6 +447,9 @@ struct TypoPerformance: Equatable {
         let landAt = airStart + tm.leapAir
         let reboundAt = landAt + tm.leapPress
         let sinkAt = reboundAt + tm.leapRebound
+        // Eyes on the landing spot, or on the new text until that is known.
+        let heading = offset.width == 0 ? gaze : (offset.width > 0 ? 1 : -1)
+        happy.look = CGSize(width: 26 * heading, height: 0)
         if age < airStart {
             let p = age / tm.leapCrouch
             pose.expression = happy
@@ -435,12 +461,13 @@ struct TypoPerformance: Equatable {
             pose.expression = happy
             pose.sink = 0
             pose.travel = CGSize(width: offset.width * CGFloat(eased), height: offset.height * CGFloat(eased))
-            let arc = max(420, abs(offset.height) * 0.6 + 380)
+            let arc = Self.leapArc(for: offset)
             pose.hop = CGFloat(sin(p * .pi)) * arc
             pose.spinDegrees = 360 * eased
             pose.squash = 1 + 0.06 * CGFloat(sin(p * .pi))
         } else if age < reboundAt {
             let p = (age - landAt) / tm.leapPress
+            happy.look = .zero
             var pressed = TypoExpression()
             pressed.eyeL = .chevron
             pressed.eyeR = .chevron
@@ -484,6 +511,11 @@ struct TypoPerformance: Equatable {
             e.armR = .init(degrees: -10)
             return e
         }
+    }
+
+    /// Height of a leap's arc in design units: higher for a longer drop.
+    static func leapArc(for offset: CGSize) -> CGFloat {
+        max(420, abs(offset.height) * 0.6 + 380)
     }
 
     /// Overshoots slightly past 1 before settling, like a key springing up.

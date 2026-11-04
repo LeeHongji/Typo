@@ -100,6 +100,25 @@ final class CaretLocatorTests: XCTestCase {
     }
 }
 
+final class CaretLineEndTests: XCTestCase {
+    // TextEdit, caret after the third character of "第一行文字用于测试光标位置".
+    private let caret = CGRect(x: 224, y: 134, width: 1, height: 16)
+
+    func testTextAfterTheCaretEndsAtTheLastCharacterOfTheLine() {
+        XCTAssertEqual(CaretLocator.textEnd(caret: caret, lineEnd: CGRect(x: 323, y: 134, width: 11, height: 16)), 334)
+    }
+
+    func testNoTextEndAtTheEndOfTheLine() {
+        XCTAssertNil(CaretLocator.textEnd(caret: caret, lineEnd: CGRect(x: 213, y: 134, width: 11, height: 16)))
+        XCTAssertNil(CaretLocator.textEnd(caret: caret, lineEnd: nil))
+    }
+
+    func testBoundsOnAnotherLineOrSpanningSeveralAreIgnored() {
+        XCTAssertNil(CaretLocator.textEnd(caret: caret, lineEnd: CGRect(x: 400, y: 152, width: 11, height: 16)), "the next line")
+        XCTAssertNil(CaretLocator.textEnd(caret: caret, lineEnd: CGRect(x: 181, y: 118, width: 600, height: 64)), "a whole paragraph")
+    }
+}
+
 final class TypoCaretLayoutTests: XCTestCase {
     private let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
 
@@ -124,6 +143,21 @@ final class TypoCaretLayoutTests: XCTestCase {
         let caret = CGRect(x: 1420, y: 400, width: 1, height: 18)
         let feet = TypoCaretLayout.feet(beside: caret, bodyHeight: 32, screen: screen)
         XCTAssertLessThan(feet.x, caret.minX)
+    }
+
+    func testTypoStandsAfterTheRestOfTheLineRatherThanOnIt() {
+        let caret = CGRect(x: 300, y: 400, width: 1, height: 18)
+        let feet = TypoCaretLayout.feet(beside: caret, textEnd: 520, bodyHeight: 32, screen: screen)
+        XCTAssertGreaterThan(feet.x - 32 * 0.75, 520, "clear of the words after the caret")
+        XCTAssertEqual(feet.y, caret.minY)
+        XCTAssertEqual(TypoCaretLayout.gaze(feet: feet, caret: caret), -1, "the new text appears on its left")
+    }
+
+    func testTypoGoesBeforeTheCaretWhenTheLineRunsToTheScreenEdge() {
+        let caret = CGRect(x: 300, y: 400, width: 1, height: 18)
+        let feet = TypoCaretLayout.feet(beside: caret, textEnd: 1420, bodyHeight: 32, screen: screen)
+        XCTAssertLessThan(feet.x, caret.minX)
+        XCTAssertEqual(TypoCaretLayout.gaze(feet: feet, caret: caret), 1)
     }
 
     func testLeapsOnlyWhenTheCaretMovedInTheSameApp() {

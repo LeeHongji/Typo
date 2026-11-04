@@ -23,6 +23,10 @@ final class TypoPlacement {
 enum TypoCaretLayout {
     static let heightPerLine: CGFloat = 1.8
     static let bodyHeights: ClosedRange<CGFloat> = 22...44
+    /// Beside the caret Typo is small, so its bubble is drawn larger to keep the glyph legible.
+    static let bubbleScale: CGFloat = 1.3
+    /// How high Typo hops, in design units, when the caret it follows moves to another line.
+    static let followHop: CGFloat = 160
 
     static func bodyHeight(forCaretHeight h: CGFloat) -> CGFloat {
         min(bodyHeights.upperBound, max(bodyHeights.lowerBound, h * heightPerLine))
@@ -32,15 +36,21 @@ enum TypoCaretLayout {
         bodyHeight / TypoGeometry.bodyHeight
     }
 
-    /// Where Typo's feet go: on the caret's bottom edge, just after it, or just
-    /// before it when there is no room on the right of the screen.
-    static func feet(beside caret: CGRect, bodyHeight: CGFloat, screen: CGRect) -> CGPoint {
+    /// Where Typo's feet go: on the caret's bottom edge, just after it (or
+    /// after the rest of the line's text, `textEnd`, so no words are covered),
+    /// or just before the caret when there is no room on the right of the screen.
+    static func feet(beside caret: CGRect, textEnd: CGFloat? = nil, bodyHeight: CGFloat, screen: CGRect) -> CGPoint {
         let gap = bodyHeight * 0.25
         let halfBody = bodyHeight * 0.75
         let reachRight = bodyHeight * 1.7
-        let right = caret.maxX + gap + halfBody
+        let right = max(caret.maxX, textEnd ?? caret.maxX) + gap + halfBody
         let x = right + reachRight <= screen.maxX ? right : caret.minX - gap - halfBody
         return CGPoint(x: x, y: caret.minY)
+    }
+
+    /// Which way Typo looks for the new text: it appears at the caret.
+    static func gaze(feet: CGPoint, caret: CGRect) -> CGFloat {
+        feet.x >= caret.maxX ? -1 : 1
     }
 
     /// A window that holds Typo standing at each of `feet`, plus the arc of a
@@ -125,6 +135,17 @@ final class TypoCaretStage {
     private var pendingLeap = false
     private var followInFlight = false
     private var lastFollow: TimeInterval = 0
+    private var panelFrame: CGRect = .zero
+    /// A move to a new caret position: a short slide along the line, or a
+    /// small hop when the caret changed lines.
+    private struct Glide {
+        let from: CGPoint
+        let to: CGPoint
+        let start: TimeInterval
+        let hops: Bool
+        var duration: TimeInterval { hops ? 0.28 : 0.18 }
+    }
+    private var glide: Glide?
 
     init(state: AppState, placement: TypoPlacement? = nil) {
         self.state = state
@@ -156,12 +177,19 @@ final class TypoCaretStage {
             startTicking()
             return
         }
+        // Take off as the text lands instead of waiting for the app to report
+        // the new caret, so Typo is not left standing on the pasted words. The
+        // leap starts in place and learns its landing spot during the crouch.
         pendingLeap = true
+        endGlide()
+        performance.finish(.leap(.zero), at: now)
+        placePanel(feet: [feet], arc: TypoPerformance.leapArc(for: .zero) * model.scale)
+        startTicking()
         let session = self.session
         Task { [weak self] in
             let target = await Self.caretAfterPaste(start: start)
             guard let self, self.session == session else { return }
-            self.leap(to: target)
+            self.land(on: target)
         }
     }
 
@@ -208,10 +236,12 @@ final class TypoCaretStage {
         DebugFileLogger.log(
             "typo caret: found app=\(bundle) tier=\(found.tier.rawValue) "
                 + "rect=\(Int(found.rect.minX)),\(Int(found.rect.minY)),\(Int(found.rect.width))x\(Int(found.rect.height))"
+                + (found.textEnd.map { " textEnd=\(Int($0))" } ?? "")
         )
         start = found
         bodyHeight = TypoCaretLayout.bodyHeight(forCaretHeight: found.rect.height)
-        feet = TypoCaretLayout.feet(beside: found.rect, bodyHeight: bodyHeight, screen: screen.visibleFrame)
+        feet = TypoCaretLayout.feet(beside: found.rect, textEnd: found.textEnd, bodyHeight: bodyHeight, screen: screen.visibleFrame)
+        glide = nil
         placePanel(feet: [feet])
         if let frame = panel?.frame {
             DebugFileLogger.log(
@@ -221,6 +251,7 @@ final class TypoCaretStage {
             )
         }
         performance = TypoPerformance(peek: .caret, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        performance.gaze = TypoCaretLayout.gaze(feet: feet, caret: found.rect)
         performance.begin(at: CACurrentMediaTime())
         placement.mode = .caret
         lastFollow = CACurrentMediaTime()
@@ -256,24 +287,19 @@ final class TypoCaretStage {
         return nil
     }
 
-    private func leap(to target: CaretLocation?) {
+    private func land(on target: CaretLocation?) {
         pendingLeap = false
-        let now = CACurrentMediaTime()
         guard let target,
               let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: target.rect.midX, y: target.rect.midY)) })
         else {
-            DebugFileLogger.log("typo caret: no leap target, pressing in place")
-            performance.finish(.success, at: now)
-            startTicking()
+            DebugFileLogger.log("typo caret: no leap target, flipping in place")
             return
         }
         let scale = TypoCaretLayout.scale(bodyHeight: bodyHeight)
-        let landing = TypoCaretLayout.feet(beside: target.rect, bodyHeight: bodyHeight, screen: screen.visibleFrame)
+        let landing = TypoCaretLayout.feet(beside: target.rect, textEnd: target.textEnd, bodyHeight: bodyHeight, screen: screen.visibleFrame)
         let offset = TypoCaretLayout.designOffset(from: feet, to: landing, scale: scale)
-        let arc = max(420, abs(offset.height) * 0.6 + 380) * scale
-        placePanel(feet: [feet, landing], arc: arc)
-        performance.finish(.leap(offset), at: now)
-        startTicking()
+        placePanel(feet: [feet, landing], arc: TypoPerformance.leapArc(for: offset) * scale)
+        performance.retarget(offset)
     }
 
     // MARK: - Frames
@@ -285,7 +311,10 @@ final class TypoCaretStage {
             followCaretIfDue(at: now)
         }
         performance.update(level: state.audioLevel.current, at: now)
-        model.pose = performance.pose(at: now)
+        var pose = performance.pose(at: now)
+        pose.expression.bubbleScale = TypoCaretLayout.bubbleScale
+        pose.hop += advanceGlide(at: now)
+        model.pose = pose
         if performance.isVisible || pendingLeap {
             panel?.orderFrontRegardless()
         } else {
@@ -331,13 +360,59 @@ final class TypoCaretStage {
             guard let self, self.session == session else { return }
             self.followInFlight = false
             guard let found = lookup.location, !self.isExiting, !self.pendingLeap,
-                  hypot(found.rect.maxX - start.rect.maxX, found.rect.minY - start.rect.minY) > 2,
                   let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: found.rect.midX, y: found.rect.midY)) })
             else { return }
+            let next = TypoCaretLayout.feet(beside: found.rect, textEnd: found.textEnd, bodyHeight: self.bodyHeight, screen: screen.visibleFrame)
+            guard hypot(next.x - self.feet.x, next.y - self.feet.y) > 2 else { return }
             self.start = found
-            self.feet = TypoCaretLayout.feet(beside: found.rect, bodyHeight: self.bodyHeight, screen: screen.visibleFrame)
-            self.placePanel(feet: [self.feet])
+            self.performance.gaze = TypoCaretLayout.gaze(feet: next, caret: found.rect)
+            self.move(to: next, at: CACurrentMediaTime())
         }
+    }
+
+    /// Slides or hops to `next`; a jump across the screen (a window moved or
+    /// the text scrolled far) is not a walk, so Typo just appears there.
+    private func move(to next: CGPoint, at now: TimeInterval) {
+        let from = glide.map { glidePoint($0, at: now) } ?? feet
+        feet = next
+        let distance = hypot(next.x - from.x, next.y - from.y)
+        guard !performance.reduceMotion, distance < bodyHeight * 12 else {
+            glide = nil
+            placePanel(feet: [next])
+            return
+        }
+        let move = Glide(from: from, to: next, start: now, hops: abs(next.y - from.y) > 2)
+        let arc = move.hops ? TypoCaretLayout.followHop * TypoCaretLayout.scale(bodyHeight: bodyHeight) : 0
+        placePanel(feet: [from, next], arc: arc, standing: from)
+        glide = move
+    }
+
+    private func glideProgress(_ g: Glide, at now: TimeInterval) -> Double {
+        min(1, max(0, (now - g.start) / g.duration))
+    }
+
+    private func glidePoint(_ g: Glide, at now: TimeInterval) -> CGPoint {
+        let p = glideProgress(g, at: now)
+        let eased = CGFloat(1 - pow(1 - p, 3))
+        return CGPoint(x: g.from.x + (g.to.x - g.from.x) * eased, y: g.from.y + (g.to.y - g.from.y) * eased)
+    }
+
+    /// Moves Typo's line along the current glide; answers the hop to add, in design units.
+    private func advanceGlide(at now: TimeInterval) -> CGFloat {
+        guard let g = glide else { return 0 }
+        let p = glideProgress(g, at: now)
+        if p >= 1 {
+            endGlide()
+            return 0
+        }
+        model.line = lineInPanel(glidePoint(g, at: now))
+        return g.hops ? CGFloat(sin(p * .pi)) * TypoCaretLayout.followHop : 0
+    }
+
+    private func endGlide() {
+        guard glide != nil else { return }
+        glide = nil
+        placePanel(feet: [feet])
     }
 
     private func startTicking() {
@@ -350,12 +425,19 @@ final class TypoCaretStage {
         tick()
     }
 
-    private func placePanel(feet points: [CGPoint], arc: CGFloat = 0) {
+    /// Sizes the panel to hold Typo at each of `points` and puts its line at
+    /// `standing` (by default where Typo stands now).
+    private func placePanel(feet points: [CGPoint], arc: CGFloat = 0, standing: CGPoint? = nil) {
         let frame = TypoCaretLayout.panelFrame(feet: points, bodyHeight: bodyHeight, arc: arc)
         let panel = self.panel ?? makePanel(frame: frame)
         panel.setFrame(frame, display: false)
+        panelFrame = frame
         model.scale = TypoCaretLayout.scale(bodyHeight: bodyHeight)
-        model.line = CGPoint(x: feet.x - frame.minX, y: frame.maxY - feet.y)
+        model.line = lineInPanel(standing ?? feet)
+    }
+
+    private func lineInPanel(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x - panelFrame.minX, y: panelFrame.maxY - point.y)
     }
 
     private func makePanel(frame: CGRect) -> TypoCaretPanel {
@@ -369,9 +451,9 @@ final class TypoCaretStage {
     }
 }
 
-/// Draws the caret-side Typo. The part below its line is clipped, so it rises
-/// out of and sinks back into the text it stands on; the line follows Typo's
-/// travel during a leap.
+/// Draws the caret-side Typo and its shadow. The part of Typo below its line
+/// is clipped, so it rises out of and sinks back into the text it stands on;
+/// the line follows Typo's travel during a leap.
 struct TypoCaretView: View {
     let model: TypoCaretModel
 
@@ -380,6 +462,7 @@ struct TypoCaretView: View {
         let line = model.line
         let scale = model.scale
         Canvas { ctx, size in
+            TypoRenderer.drawShadow(pose, in: &ctx, line: line, scale: scale)
             let lineY = line.y + pose.travel.height * scale
             ctx.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: max(0, lineY + 1))))
             TypoRenderer.draw(pose, in: &ctx, line: line, scale: scale)

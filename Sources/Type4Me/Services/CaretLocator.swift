@@ -18,6 +18,9 @@ struct CaretLocation: Equatable, Sendable {
     let rect: CGRect
     let tier: Tier
     let processIdentifier: pid_t
+    /// Where the text after the caret ends on the caret's own line, when
+    /// there is any: Typo stands there rather than on top of those words.
+    var textEnd: CGFloat?
 }
 
 enum CaretLookup: Equatable, Sendable {
@@ -119,7 +122,12 @@ enum CaretLocator {
         for case let (axRect?, tier) in candidates {
             let rect = cocoaRect(fromAX: axRect, primaryMaxY: primaryMaxY)
             if isPlausibleCaret(rect, screens: screens) {
-                return .found(CaretLocation(rect: rect, tier: tier, processIdentifier: pid))
+                // WebKit and Chromium answer these line queries too, though their
+                // caret comes from text markers.
+                let lineEnd = rangeLineEnd(element)
+                let end = textEnd(caret: axRect, lineEnd: lineEnd)
+                if trace { DebugFileLogger.log("typo caret probe: lineEnd=\(lineEnd.map { "\($0)" } ?? "nil") textEnd=\(end.map { "\($0)" } ?? "nil")") }
+                return .found(CaretLocation(rect: rect, tier: tier, processIdentifier: pid, textEnd: end))
             }
         }
         if textRoles.contains(role) || textRoles.contains(copyString(element, kAXRoleAttribute) ?? ""),
@@ -168,6 +176,17 @@ enum CaretLocator {
             return CGRect(x: direct.minX, y: direct.minY, width: max(1, direct.width), height: direct.height)
         }
         return nil
+    }
+
+    /// The x where text after the caret ends, given the bounds of the end of
+    /// the caret's line (AX coordinates, like `caret`). Bounds that end at the
+    /// caret, or that lie on another line, mean no text follows it.
+    static func textEnd(caret: CGRect, lineEnd: CGRect?) -> CGFloat? {
+        guard let end = lineEnd, end.height > 0, end.height < max(caret.height, 4) * 1.8,
+              end.maxX > caret.maxX + 2,
+              abs(end.midY - caret.midY) < max(caret.height, 4) * 0.5
+        else { return nil }
+        return end.maxX
     }
 
     static let textRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField"]
@@ -220,12 +239,7 @@ enum CaretLocator {
 
     /// An empty box has its caret at the start with nothing selected.
     private static func isCollapsedAtStart(_ element: AXUIElement) -> Bool {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
-              let value, CFGetTypeID(value) == AXValueGetTypeID()
-        else { return false }
-        var range = CFRange()
-        guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return false }
+        guard let range = selectedRange(element) else { return false }
         return range.location == 0 && range.length == 0
     }
 
@@ -264,33 +278,70 @@ enum CaretLocator {
     }
 
     private static func rangeRect(_ element: AXUIElement) -> CGRect? {
+        guard let selected = selectedRange(element) else { return nil }
+        if selected.length > 0 {
+            // A selection's bounds span all of it; the caret is at its end.
+            guard let last = characterRect(element, at: selected.location + selected.length - 1), last.height > 0 else { return nil }
+            return CGRect(x: last.maxX, y: last.minY, width: 1, height: last.height)
+        }
+        var collapsed = selected
+        guard let value = AXValueCreate(.cfRange, &collapsed) else { return nil }
+        let direct = parameterizedRect(element, kAXBoundsForRangeParameterizedAttribute, value)
+        let before = selected.location > 0 ? characterRect(element, at: selected.location - 1) : nil
+        let after = characterRect(element, at: selected.location)
+        return collapsedCaret(direct: direct, characterBefore: before, characterAfter: after)
+    }
+
+    /// The last character on the caret's line, ignoring its line break, when
+    /// it comes after the caret.
+    private static func rangeLineEnd(_ element: AXUIElement) -> CGRect? {
+        guard let selected = selectedRange(element) else { return nil }
+        let index = selected.location + selected.length
+        guard let line = parameterized(element, kAXLineForIndexParameterizedAttribute, index as CFNumber) as? Int,
+              let lineValue = parameterized(element, kAXRangeForLineParameterizedAttribute, line as CFNumber),
+              CFGetTypeID(lineValue) == AXValueGetTypeID()
+        else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(lineValue as! AXValue, .cfRange, &range), range.length > 0 else { return nil }
+        var last = range.location + range.length - 1
+        var lastRange = CFRange(location: last, length: 1)
+        if let value = AXValueCreate(.cfRange, &lastRange),
+           let character = parameterized(element, kAXStringForRangeParameterizedAttribute, value) as? String,
+           character.allSatisfy(\.isNewline) {
+            last -= 1
+        }
+        guard last >= index else { return nil }
+        return characterRect(element, at: last)
+    }
+
+    private static func selectedRange(_ element: AXUIElement) -> CFRange? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXValueGetTypeID()
         else { return nil }
         var selected = CFRange()
         guard AXValueGetValue(value as! AXValue, .cfRange, &selected) else { return nil }
-        func characterRect(at location: Int) -> CGRect? {
-            var range = CFRange(location: location, length: 1)
-            guard location >= 0, let value = AXValueCreate(.cfRange, &range) else { return nil }
-            return parameterizedRect(element, kAXBoundsForRangeParameterizedAttribute, value)
+        return selected
+    }
+
+    private static func characterRect(_ element: AXUIElement, at location: Int) -> CGRect? {
+        var range = CFRange(location: location, length: 1)
+        guard location >= 0, let value = AXValueCreate(.cfRange, &range) else { return nil }
+        return parameterizedRect(element, kAXBoundsForRangeParameterizedAttribute, value)
+    }
+
+    private static func parameterized(_ element: AXUIElement, _ attribute: String, _ parameter: CFTypeRef) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, attribute as CFString, parameter, &value) == .success else {
+            return nil
         }
-        if selected.length > 0 {
-            // A selection's bounds span all of it; the caret is at its end.
-            guard let last = characterRect(at: selected.location + selected.length - 1), last.height > 0 else { return nil }
-            return CGRect(x: last.maxX, y: last.minY, width: 1, height: last.height)
-        }
-        let direct = parameterizedRect(element, kAXBoundsForRangeParameterizedAttribute, value)
-        let before = selected.location > 0 ? characterRect(at: selected.location - 1) : nil
-        let after = characterRect(at: selected.location)
-        return collapsedCaret(direct: direct, characterBefore: before, characterAfter: after)
+        return value
     }
 
     private static func parameterizedRect(_ element: AXUIElement, _ attribute: String, _ parameter: CFTypeRef) -> CGRect? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(element, attribute as CFString, parameter, &value) == .success,
-              let value, CFGetTypeID(value) == AXValueGetTypeID()
-        else { return nil }
+        guard let value = parameterized(element, attribute, parameter), CFGetTypeID(value) == AXValueGetTypeID() else {
+            return nil
+        }
         var rect = CGRect.zero
         guard AXValueGetValue(value as! AXValue, .cgRect, &rect) else { return nil }
         return rect
