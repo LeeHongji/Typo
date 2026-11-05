@@ -87,12 +87,10 @@ struct TypoPerformance: Equatable {
     // The meter maps -50...0 dBFS onto 0...1 (AudioCaptureEngine.calculateLevel).
     /// About -35 dB: speech has started, so the mouth opens.
     static let talkLevel: Float = 0.3
-    /// About -10 dB, held for `loudHold`: shouting, so Typo bristles.
-    static let loudLevel: Float = 0.8
-    /// About -15 dB, held for `loudRelease`: calm again.
-    static let calmLevel: Float = 0.7
     /// About -37 dB: silence for the "still listening" bubble.
     static let quietLevel: Float = 0.25
+    // Shouting, held for `loudHold`, is measured against this speaker's usual
+    // loudness (`TypoRhythm.shoutLevel`); calm again below `calmLevel`.
 
     var timing = Timing.standard
     var peek = Peek.bar
@@ -116,6 +114,9 @@ struct TypoPerformance: Equatable {
     /// changes its timing mid-air.
     private(set) var leap = Leap(offset: .zero, timing: .standard)
     private var retargetedAt: TimeInterval = -.infinity
+    /// Typo's body while it listens: beats to the voice, fidgets, reactions.
+    /// Stepped by `update`, so a pose reflects the last update before it.
+    private(set) var motion = TypoMotion()
 
     init(timing: Timing = .standard, peek: Peek = .bar, reduceMotion: Bool = false) {
         self.timing = timing
@@ -141,7 +142,18 @@ struct TypoPerformance: Equatable {
         case .hidden, .exiting, .reacting:
             enter(.entering, at: t)
             resetVoice()
+            motion = TypoMotion(seed: UInt64(truncatingIfNeeded: Int64((t * 1000).rounded())))
         case .entering, .listening, .thinking:
+            break
+        }
+    }
+
+    /// The words recognized so far in this dictation.
+    mutating func heard(_ text: String, at t: TimeInterval) {
+        switch stage {
+        case .entering, .listening:
+            motion.heard(text, at: t, animated: !reduceMotion)
+        case .hidden, .thinking, .reacting, .exiting:
             break
         }
     }
@@ -277,8 +289,9 @@ struct TypoPerformance: Equatable {
     }
 
     private mutating func trackVoice(at t: TimeInterval) {
+        motion.step(level: level, at: t, quietFor: quietSince.map { t - $0 }, animated: !reduceMotion)
         if isLoud {
-            if level < Self.calmLevel {
+            if level < motion.rhythm.calmLevel {
                 if calmSince == nil { calmSince = t }
                 if let since = calmSince, Self.reached(t - since, timing.loudRelease) {
                     isLoud = false
@@ -289,7 +302,7 @@ struct TypoPerformance: Equatable {
             } else {
                 calmSince = nil
             }
-        } else if level >= Self.loudLevel {
+        } else if level >= motion.rhythm.shoutLevel {
             if loudSince == nil { loudSince = t }
             if let since = loudSince, Self.reached(t - since, timing.loudHold) {
                 isLoud = true
@@ -350,9 +363,13 @@ struct TypoPerformance: Equatable {
                 pose.expression = Self.bristled
                 pose.shake = reduceMotion ? 0 : CGFloat(sin(t * 70)) * 9
             } else if !reduceMotion {
-                let voice = max(0, level - Self.talkLevel) / (1 - Self.talkLevel)
-                pose.hop = CGFloat(abs(sin(t * .pi * 2.4))) * 14 * CGFloat(min(1, voice * 2))
-                pose.squash = 1 + breath(at: t)
+                let m = motion
+                pose.hop = max(0, m.hop.value)
+                // Below the line the hop spring is the landing: a squash, not a sink.
+                let landing = min(0, m.hop.value) / 300
+                let dozing = m.isDozing(quietFor: quietSince.map { t - $0 })
+                pose.squash = 1 + m.squash.value + landing + breath(at: t) * (dozing ? 2 : 1)
+                pose.tiltDegrees = Double(m.tilt.value)
             }
         case .thinking:
             pose.sink = peek.thinking
@@ -394,10 +411,62 @@ struct TypoPerformance: Equatable {
             e.eyeL = .line
             e.eyeR = .line
         }
-        if let since = quietSince, Self.reached(t - since, timing.quietBubble) {
+        let m = motion
+        let quiet = quietSince.map { t - $0 }
+        if m.isDozing(quietFor: quiet), let quiet {
+            // Long quiet: eyes shut, a slow Zz.
+            e.eyeL = .line
+            e.eyeR = .line
+            e.mouth = .flat
+            e.bubble = .zz
+            e.bubbleOpacity = min(1, (quiet - TypoMotion.dozeAfter) / 0.4)
+            return e
+        }
+        if let quiet, Self.reached(quiet, timing.quietBubble) {
             e.bubble = .dots
-            e.bubbleOpacity = min(1, (t - since - timing.quietBubble) / 0.2)
+            e.bubbleOpacity = min(1, (quiet - timing.quietBubble) / 0.2)
             e.look = CGSize(width: 30, height: -18)
+        }
+        if let fidget = m.fidget {
+            let p = min(1, max(0, (t - m.fidgetStart) / TypoMotion.fidgetLength))
+            // Few distinct steps, so each face is drawn once and then reused.
+            func steps(_ x: Double) -> CGFloat { CGFloat((x * 2).rounded() / 2) }
+            switch fidget {
+            case .lookAround:
+                e.look = CGSize(width: steps(sin(p * 2 * .pi)) * 34, height: -8)
+            case .doubleBlink:
+                if (0.1..<0.22).contains(p) || (0.34..<0.46).contains(p) {
+                    e.eyeL = .line
+                    e.eyeR = .line
+                }
+            case .glance:
+                e.look = CGSize(width: 30 * (gaze == 0 ? 1 : gaze), height: 16)
+            case .stretch:
+                let up = Double(steps(sin(p * .pi)))
+                e.armL = .init(up: up > 0, degrees: -18 * up)
+                e.armR = .init(up: up > 0, degrees: 60 * up)
+                if (0.3..<0.7).contains(p) { e.eyeL = .happy; e.eyeR = .happy }
+            }
+        }
+        if let cue = m.cue {
+            switch cue {
+            case .nod:
+                e.look = CGSize(width: 26 * (gaze == 0 ? 1 : gaze), height: 14)
+            case .question:
+                e.bubble = .question
+                e.bubbleOpacity = min(1, (t - m.cueStart) / 0.12)
+                e.look = CGSize(width: -14, height: -22)
+            case .exclaim:
+                e.armL = .init(up: true, degrees: -18)
+                e.armR = .init(up: true, degrees: 60)
+                e.eyeL = .open
+                e.eyeR = .open
+            case .wake:
+                e.eyeL = .ring
+                e.eyeR = .ring
+                e.bubble = .exclaim
+                e.bubbleOpacity = 1
+            }
         }
         return e
     }

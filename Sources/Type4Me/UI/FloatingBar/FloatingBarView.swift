@@ -567,7 +567,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
         TypoBuddyCue(
             phase: state.barPhase,
             exitStyle: state.barPhase == .hidden ? chrome?.exitSnapshot?.hideStyle : nil,
-            feedbackKind: presentedFeedbackKind
+            feedbackKind: presentedFeedbackKind,
+            transcript: state.transcriptionText
         )
     }
 

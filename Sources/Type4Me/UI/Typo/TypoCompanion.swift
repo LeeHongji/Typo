@@ -53,6 +53,8 @@ struct TypoBuddyCue: Equatable {
     /// Set while the bar plays its exit; `.output` means text landed.
     var exitStyle: FloatingBarHideStyle?
     var feedbackKind: FeedbackKind
+    /// The words recognized so far; Typo nods as they appear.
+    var transcript: String = ""
 }
 
 /// Turns bar cues into performance events. A class so the timeline can advance
@@ -65,6 +67,7 @@ final class TypoDirector {
 
     func pose(for cue: TypoBuddyCue, level: Float, reduceMotion: Bool, at t: TimeInterval) -> TypoPerformance.Pose {
         apply(cue, reduceMotion: reduceMotion, at: t)
+        performance.heard(cue.transcript, at: t)
         performance.update(level: level, at: t)
         return performance.pose(at: t)
     }
