@@ -172,6 +172,19 @@ final class TypoCaretLayoutTests: XCTestCase {
         XCTAssertGreaterThan(unknown.x, caret.maxX, "no box reported: only the screen limits Typo")
     }
 
+    func testACaretMoveAfterTheTalkingIsTheTextLanding() {
+        // Regression: a caret move heard while Typo was thinking used to carry
+        // it to the new text and update where it started from, so the leap at
+        // hide time found the caret unmoved and only flipped in place.
+        XCTAssertEqual(TypoCaretLayout.caretMove(during: .listening), .walk)
+        XCTAssertEqual(TypoCaretLayout.caretMove(during: .entering), .walk)
+        XCTAssertEqual(TypoCaretLayout.caretMove(during: .thinking), .leap)
+        XCTAssertEqual(TypoCaretLayout.caretMove(during: .reacting(.done)), .leap)
+        XCTAssertEqual(TypoCaretLayout.caretMove(during: .exiting(.leap(.zero))), .leap, "a newer landing mid-air")
+        XCTAssertEqual(TypoCaretLayout.caretMove(during: .exiting(.cancelled)), .ignore)
+        XCTAssertEqual(TypoCaretLayout.caretMove(during: .hidden), .ignore)
+    }
+
     func testLeapsOnlyWhenTheCaretMovedInTheSameApp() {
         let start = location(x: 300, y: 400)
         let moved = location(x: 520, y: 400)

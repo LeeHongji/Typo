@@ -50,10 +50,14 @@ struct TypoPerformance: Equatable {
         var successHop: TimeInterval = 0.08
         var successPress: TimeInterval = 0.1
         var successSink: TimeInterval = 0.14
-        var leapCrouch: TimeInterval = 0.08
-        var leapAir: TimeInterval = 0.42
+        var leapCrouch: TimeInterval = 0.11
+        /// Air time of the shortest leap; longer leaps stay up longer, to `leapAirMax`.
+        var leapAir: TimeInterval = 0.3
+        var leapAirMax: TimeInterval = 0.6
         var leapPress: TimeInterval = 0.12
         var leapRebound: TimeInterval = 0.16
+        /// Standing on the new text, looking at it, before going down into the line.
+        var leapSettle: TimeInterval = 0.32
         var leapSink: TimeInterval = 0.2
         var cancelSink: TimeInterval = 0.28
         var failSink: TimeInterval = 0.24
@@ -62,7 +66,10 @@ struct TypoPerformance: Equatable {
         static let standard = Timing()
 
         var successTotal: TimeInterval { successHop + successPress + successSink }
-        var leapTotal: TimeInterval { leapCrouch + leapAir + leapPress + leapRebound + leapSink }
+        /// A leap's length for a given air time.
+        func leapTotal(air: TimeInterval) -> TimeInterval {
+            leapCrouch + air + leapPress + leapRebound + leapSettle + leapSink
+        }
     }
 
     /// How deep Typo sits below the edge it stands on in each calm state.
@@ -105,6 +112,9 @@ struct TypoPerformance: Equatable {
     private var exitFromSink: CGFloat
     /// Where a retargeted leap's destination was when it was retargeted.
     private var leapFrom: CGSize = .zero
+    /// The shape of the leap under way, fixed at take-off so a retarget never
+    /// changes its timing mid-air.
+    private(set) var leap = Leap(offset: .zero, timing: .standard)
     private var retargetedAt: TimeInterval = -.infinity
 
     init(timing: Timing = .standard, peek: Peek = .bar, reduceMotion: Bool = false) {
@@ -162,6 +172,29 @@ struct TypoPerformance: Equatable {
         }
     }
 
+    /// The shape of one leap, decided by how far it goes: a short hop along
+    /// the line stays low and quick and leans into it; a long leap stays up
+    /// longer, climbs higher and somersaults.
+    struct Leap: Equatable {
+        /// Beyond about two body heights a leap turns into a somersault.
+        static let somersaultDistance: CGFloat = 1500
+
+        var air: TimeInterval
+        /// Peak height above the higher of the two lines, in design units.
+        var arc: CGFloat
+        var somersault: Bool
+        /// 1 to the right, -1 to the left: the way Typo leans and turns.
+        var direction: CGFloat
+
+        init(offset: CGSize, timing: Timing) {
+            let distance = hypot(offset.width, offset.height)
+            air = min(timing.leapAirMax, timing.leapAir + sqrt(Double(distance)) / 400)
+            arc = TypoPerformance.leapArc(for: offset)
+            somersault = distance > Self.somersaultDistance
+            direction = offset.width < 0 ? -1 : 1
+        }
+    }
+
     /// How long a leap's destination takes to slide to a retargeted one.
     static let retargetBlend: TimeInterval = 0.12
 
@@ -172,6 +205,7 @@ struct TypoPerformance: Equatable {
         guard case .exiting(.leap(let current)) = stage else { return }
         leapFrom = leapOffset(toward: current, at: t)
         retargetedAt = t
+        leap.arc = max(leap.arc, Self.leapArc(for: offset))
         stage = .exiting(.leap(offset))
     }
 
@@ -193,6 +227,7 @@ struct TypoPerformance: Equatable {
             if case .leap(let offset) = exit {
                 leapFrom = offset
                 retargetedAt = -.infinity
+                leap = Leap(offset: offset, timing: timing)
             }
             enter(.exiting(exit), at: t)
             resetVoice()
@@ -222,7 +257,7 @@ struct TypoPerformance: Equatable {
         if reduceMotion { return timing.reducedMotionFade }
         switch exit {
         case .success: return timing.successTotal
-        case .leap: return timing.leapTotal
+        case .leap: return timing.leapTotal(air: leap.air)
         case .cancelled: return timing.cancelSink
         case .failed: return timing.failSink
         }
@@ -453,10 +488,15 @@ struct TypoPerformance: Equatable {
         return pose
     }
 
-    /// The leap from the video: crouch, a somersault along an arc to the new
-    /// line, a key-like press on landing, a springy rebound, then down into the line.
+    /// The leap onto new text, in the spirit of the reference video: Typo
+    /// crouches and leans back looking at where it is going, springs up
+    /// stretched, flies a parabola (a somersault when far, a lean when near)
+    /// while its shadow runs along the ground below, lands with a key-like
+    /// press, rebounds, stands a moment looking at the text, then goes down
+    /// into the line.
     private func leapPose(to offset: CGSize, age: TimeInterval, from startSink: CGFloat) -> Pose {
         let tm = timing
+        let plan = leap
         var pose = Pose()
         var happy = TypoExpression()
         happy.eyeL = .happy
@@ -466,30 +506,42 @@ struct TypoPerformance: Equatable {
         happy.armR = .init(up: true, degrees: 60)
 
         let airStart = tm.leapCrouch
-        let landAt = airStart + tm.leapAir
+        let landAt = airStart + plan.air
         let reboundAt = landAt + tm.leapPress
-        let sinkAt = reboundAt + tm.leapRebound
-        // Eyes on the landing spot, or on the new text until that is known.
-        let heading = offset.width == 0 ? gaze : (offset.width > 0 ? 1 : -1)
-        happy.look = CGSize(width: 26 * heading, height: 0)
+        let settleAt = reboundAt + tm.leapRebound
+        let sinkAt = settleAt + tm.leapSettle
+        let crouched: CGFloat = 0.8
+        happy.look = CGSize(width: 26 * plan.direction, height: 0)
         if age < airStart {
+            // Anticipation: down and back, eyes on the landing.
             let p = age / tm.leapCrouch
+            let k = CGFloat(sin(p * .pi / 2))
             pose.expression = happy
             pose.sink = startSink * CGFloat(1 - p)
-            pose.squash = 1 - 0.15 * CGFloat(sin(p * .pi / 2))
+            pose.squash = 1 - (1 - crouched) * k
+            pose.tiltDegrees = Double(-7 * plan.direction * k)
         } else if age < landAt {
-            let p = (age - airStart) / tm.leapAir
-            let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+            let p = (age - airStart) / plan.air
+            let cp = CGFloat(p)
             pose.expression = happy
             pose.sink = 0
-            pose.travel = CGSize(width: offset.width * CGFloat(eased), height: offset.height * CGFloat(eased))
-            let arc = Self.leapArc(for: offset)
-            pose.hop = CGFloat(sin(p * .pi)) * arc
-            pose.spinDegrees = 360 * eased
-            pose.squash = 1 + 0.06 * CGFloat(sin(p * .pi))
+            // Even speed across with a soft arrival; the ground moves with it.
+            let across = 0.85 * cp + 0.15 * cp * cp * (3 - 2 * cp)
+            pose.travel = CGSize(width: offset.width * across, height: offset.height * across)
+            pose.hop = 4 * plan.arc * cp * (1 - cp)
+            if plan.somersault {
+                let turn = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+                pose.spinDegrees = 360 * turn * Double(plan.direction)
+            } else {
+                pose.tiltDegrees = Double(12 * plan.direction) * sin(p * .pi)
+            }
+            // Stretched leaving and arriving, round at the top; out of the crouch
+            // over the first few frames rather than in one snap.
+            let stretch = 1 + 0.14 * abs(CGFloat(cos(p * .pi)))
+            let release = min(1, cp / 0.08)
+            pose.squash = crouched + (stretch - crouched) * release
         } else if age < reboundAt {
             let p = (age - landAt) / tm.leapPress
-            happy.look = .zero
             var pressed = TypoExpression()
             pressed.eyeL = .chevron
             pressed.eyeR = .chevron
@@ -501,17 +553,34 @@ struct TypoPerformance: Equatable {
             pose.sink = 0
             pose.travel = offset
             pose.squash = 1 - 0.3 * CGFloat(sin(p * .pi / 2))
-        } else if age < sinkAt {
+        } else if age < settleAt {
             let p = (age - reboundAt) / tm.leapRebound
             happy.mouth = .smile
+            happy.look = .zero
             pose.expression = happy
             pose.sink = 0
             pose.travel = offset
             pose.squash = 0.7 + 0.42 * CGFloat(sin(p * .pi / 2)) - 0.12 * CGFloat(p)
+        } else if age < sinkAt {
+            // A moment on the new text, looking at it.
+            let p = (age - settleAt) / tm.leapSettle
+            var pleased = TypoExpression()
+            pleased.mouth = .smile
+            pleased.look = CGSize(width: 30 * gaze, height: 12)
+            if p > 0.55 && p < 0.75 {
+                pleased.eyeL = .line
+                pleased.eyeR = .line
+            }
+            pose.expression = pleased
+            pose.sink = 0
+            pose.travel = offset
+            pose.squash = 1 + 0.02 * CGFloat(sin(p * .pi))
         } else {
             let p = min(1, (age - sinkAt) / tm.leapSink)
-            happy.mouth = .smile
-            pose.expression = happy
+            var pleased = TypoExpression()
+            pleased.mouth = .smile
+            pleased.look = CGSize(width: 30 * gaze, height: 12)
+            pose.expression = pleased
             pose.travel = offset
             pose.sink = CGFloat(p * p)
         }
@@ -535,9 +604,11 @@ struct TypoPerformance: Equatable {
         }
     }
 
-    /// Height of a leap's arc in design units: higher for a longer drop.
+    /// Height of a leap's arc in design units: low for a hop along the line,
+    /// higher for a longer leap, and extra to climb to a line above.
     static func leapArc(for offset: CGSize) -> CGFloat {
-        max(420, abs(offset.height) * 0.6 + 380)
+        let distance = hypot(offset.width, offset.height)
+        return min(950, 260 + distance * 0.05) + max(0, -offset.height) * 0.5
     }
 
     /// Overshoots slightly past 1 before settling, like a key springing up.

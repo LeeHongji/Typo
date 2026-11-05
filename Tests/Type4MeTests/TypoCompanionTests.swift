@@ -166,24 +166,24 @@ final class TypoPerformanceTests: XCTestCase {
         let crouch = p.pose(at: 5 + timing.leapCrouch * 0.9)
         XCTAssertLessThan(crouch.sink, TypoPerformance.Peek.bar.listening, "rises out of the line before take-off")
 
-        let midAir = p.pose(at: 5 + timing.leapCrouch + timing.leapAir / 2)
+        let midAir = p.pose(at: 5 + timing.leapCrouch + p.leap.air / 2)
         XCTAssertGreaterThan(midAir.hop, 300)
         XCTAssertEqual(midAir.spinDegrees, 180, accuracy: 1, "halfway through the somersault")
         XCTAssertEqual(midAir.travel.width, 1500, accuracy: 1)
 
-        let landed = timing.leapCrouch + timing.leapAir
+        let landed = timing.leapCrouch + p.leap.air
         let press = p.pose(at: 5 + landed + timing.leapPress * 0.95)
         XCTAssertEqual(press.travel, offset)
         XCTAssertEqual(press.expression.eyeL, .chevron)
         XCTAssertLessThan(press.squash, 0.8)
         XCTAssertEqual(press.hop, 0)
 
-        let sinking = p.pose(at: 5 + timing.leapTotal - 0.01)
+        let sinking = p.pose(at: 5 + p.exitDuration(.leap(offset)) - 0.01)
         XCTAssertEqual(sinking.travel, offset, "sinks into the new line, not the old one")
         XCTAssertGreaterThan(sinking.sink, 0.85)
-        p.update(level: 0, at: 5 + timing.leapTotal)
+        p.update(level: 0, at: 5 + p.exitDuration(.leap(offset)))
         XCTAssertEqual(p.stage, .hidden)
-        XCTAssertLessThan(timing.leapTotal, 1.1, "matches the video's roughly one-second landing")
+        XCTAssertLessThan(p.exitDuration(.leap(offset)), 1.4, "about a second from take-off to gone")
     }
 
     func testReducedMotionLeapFadesInPlace() {
@@ -472,27 +472,25 @@ final class TypoStandingDetailTests: XCTestCase {
 
     // MARK: Leap learning its landing late
 
-    func testLeapCanLearnItsLandingDuringTheCrouch() {
+    func testLeapLooksWhereItIsGoingAndCanLearnABetterLanding() {
         var p = standing()
-        p.gaze = -1
-        p.finish(.leap(.zero), at: 5)
+        p.finish(.leap(CGSize(width: -1800, height: 0)), at: 5)
         let crouch = p.pose(at: 5 + timing.leapCrouch * 0.5)
         XCTAssertEqual(crouch.travel, .zero)
-        XCTAssertLessThan(crouch.expression.look.width, 0, "eyes on the new text until the landing is known")
+        XCTAssertLessThan(crouch.expression.look.width, 0, "eyes on the landing, to the left")
+        XCTAssertLessThan(crouch.squash, 0.95, "crouches before take-off")
 
-        let offset = CGSize(width: 2000, height: 300)
+        let offset = CGSize(width: -2000, height: 300)
         p.retarget(offset, at: 5 + timing.leapCrouch * 0.5)
         XCTAssertEqual(p.stage, .exiting(.leap(offset)))
-        let midAir = p.pose(at: 5 + timing.leapCrouch + timing.leapAir / 2)
-        XCTAssertEqual(midAir.travel.width, 1000, accuracy: 1)
-        XCTAssertGreaterThan(midAir.expression.look.width, 0, "eyes on the landing spot")
-        XCTAssertEqual(p.pose(at: 5 + timing.leapTotal - 0.01).travel, offset)
+        XCTAssertEqual(p.pose(at: 5 + timing.leapCrouch + p.leap.air + timing.leapPress * 0.9).travel, offset)
+        XCTAssertEqual(p.pose(at: 5 + p.exitDuration(.leap(offset)) - 0.01).travel, offset)
     }
 
     func testNewsOfTheLandingMidAirSlidesTheDestinationInsteadOfJumping() {
         var p = standing()
         p.finish(.leap(.zero), at: 5)
-        let tAir = 5 + timing.leapCrouch + timing.leapAir * 0.3
+        let tAir = 5 + timing.leapCrouch + p.leap.air * 0.3
         let before = p.pose(at: tAir).travel
         p.retarget(CGSize(width: 2000, height: 0), at: tAir)
         XCTAssertEqual(p.pose(at: tAir).travel.width, before.width, accuracy: 0.001, "no jump at the moment of the news")
@@ -503,7 +501,7 @@ final class TypoStandingDetailTests: XCTestCase {
             XCTAssertLessThan(w - last, 400, "a smooth slide")
             last = w
         }
-        let landed = p.pose(at: 5 + timing.leapCrouch + timing.leapAir + timing.leapPress * 0.9).travel
+        let landed = p.pose(at: 5 + timing.leapCrouch + p.leap.air + timing.leapPress * 0.9).travel
         XCTAssertEqual(landed.width, 2000, accuracy: 0.001)
     }
 
@@ -516,18 +514,52 @@ final class TypoStandingDetailTests: XCTestCase {
         XCTAssertEqual(p.stage, .exiting(.success))
     }
 
-    func testLeapInPlaceStillSomersaultsAndPresses() {
+    func testShortHopLeansAndALongLeapSomersaultsHigherAndLonger() {
+        var near = standing()
+        near.finish(.leap(CGSize(width: 600, height: 0)), at: 5)
+        let hopTop = near.pose(at: 5 + timing.leapCrouch + near.leap.air / 2)
+        XCTAssertEqual(hopTop.spinDegrees, 0, "a hop along the line does not flip")
+        XCTAssertGreaterThan(hopTop.tiltDegrees, 5, "it leans into the hop")
+
+        var far = standing()
+        far.finish(.leap(CGSize(width: 9000, height: 400)), at: 5)
+        let farTop = far.pose(at: 5 + timing.leapCrouch + far.leap.air / 2)
+        XCTAssertEqual(farTop.spinDegrees, 180, accuracy: 1, "halfway through the somersault")
+        XCTAssertGreaterThan(far.leap.air, near.leap.air)
+        XCTAssertGreaterThan(farTop.hop, hopTop.hop)
+        XCTAssertLessThanOrEqual(far.leap.air, timing.leapAirMax)
+
+        var left = standing()
+        left.finish(.leap(CGSize(width: -9000, height: 0)), at: 5)
+        XCTAssertLessThan(left.pose(at: 5 + timing.leapCrouch + left.leap.air / 2).spinDegrees, 0, "flips toward where it goes")
+    }
+
+    func testLeapTakesOffStretchedWithoutASnap() {
         var p = standing()
-        p.finish(.leap(.zero), at: 5)
-        let midAir = p.pose(at: 5 + timing.leapCrouch + timing.leapAir / 2)
-        XCTAssertGreaterThan(midAir.hop, 300)
-        XCTAssertEqual(midAir.travel, .zero)
-        XCTAssertLessThan(p.pose(at: 5 + timing.leapCrouch + timing.leapAir + timing.leapPress * 0.95).squash, 0.8)
+        p.finish(.leap(CGSize(width: 3000, height: 0)), at: 5)
+        let endOfCrouch = p.pose(at: 5 + timing.leapCrouch - 0.001).squash
+        let takeOff = p.pose(at: 5 + timing.leapCrouch + 0.001).squash
+        XCTAssertEqual(takeOff, endOfCrouch, accuracy: 0.05, "no one-frame jump out of the crouch")
+        XCTAssertGreaterThan(p.pose(at: 5 + timing.leapCrouch + p.leap.air * 0.12).squash, 1.05, "stretched as it leaves")
+        XCTAssertEqual(p.pose(at: 5 + timing.leapCrouch + p.leap.air * 0.5).squash, 1, accuracy: 0.01, "round at the top")
+    }
+
+    func testAfterLandingTypoLingersOnTheTextLookingAtIt() {
+        var p = standing()
+        p.gaze = -1
+        let offset = CGSize(width: 3000, height: 0)
+        p.finish(.leap(offset), at: 5)
+        let settle = 5 + timing.leapCrouch + p.leap.air + timing.leapPress + timing.leapRebound + timing.leapSettle * 0.3
+        let pose = p.pose(at: settle)
+        XCTAssertEqual(pose.sink, 0, "still standing")
+        XCTAssertEqual(pose.travel, offset)
+        XCTAssertLessThan(pose.expression.look.width, 0, "looking at the text it landed beside")
     }
 
     func testLeapArcClimbsForALongerDrop() {
-        XCTAssertEqual(TypoPerformance.leapArc(for: .zero), 420)
-        XCTAssertGreaterThan(TypoPerformance.leapArc(for: CGSize(width: 0, height: 1000)), 420)
+        let hop = TypoPerformance.leapArc(for: CGSize(width: 600, height: 0))
+        XCTAssertGreaterThan(TypoPerformance.leapArc(for: CGSize(width: 6000, height: 0)), hop, "farther goes higher")
+        XCTAssertGreaterThan(TypoPerformance.leapArc(for: CGSize(width: 600, height: -1000)), hop, "climbing to a line above needs more")
     }
 }
 

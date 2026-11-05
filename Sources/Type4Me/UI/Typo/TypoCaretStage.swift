@@ -54,6 +54,25 @@ enum TypoCaretLayout {
         return CGPoint(x: x, y: caret.minY)
     }
 
+    /// What Typo does when the caret beside it moves.
+    enum CaretMove: Equatable {
+        /// The user moved it while talking: walk or hop along.
+        case walk
+        /// After the talking the move is the text landing: leap onto it then,
+        /// not later when the bar hides (by which time Typo would only have
+        /// been carried there, and the leap would find nothing left to do).
+        case leap
+        case ignore
+    }
+
+    static func caretMove(during stage: TypoPerformance.Stage) -> CaretMove {
+        switch stage {
+        case .entering, .listening: return .walk
+        case .thinking, .reacting, .exiting(.leap): return .leap
+        case .hidden, .exiting: return .ignore
+        }
+    }
+
     /// Which way Typo looks for the new text: it appears at the caret.
     static func gaze(feet: CGPoint, caret: CGRect) -> CGFloat {
         feet.x >= caret.maxX ? -1 : 1
@@ -148,8 +167,19 @@ final class TypoCaretStage {
         let from: CGPoint
         let to: CGPoint
         let start: TimeInterval
-        let hops: Bool
-        var duration: TimeInterval { hops ? 0.28 : 0.18 }
+        /// Peak of the hop in design units; 0 slides along the line.
+        let hopHeight: CGFloat
+        let duration: TimeInterval
+
+        init(from: CGPoint, to: CGPoint, start: TimeInterval, bodyHeight: CGFloat) {
+            self.from = from
+            self.to = to
+            self.start = start
+            let bodies = hypot(to.x - from.x, to.y - from.y) / bodyHeight
+            let hops = abs(to.y - from.y) > 2 || bodies > 4
+            hopHeight = hops ? TypoCaretLayout.followHop * min(3, 1 + bodies / 6) : 0
+            duration = hops ? min(0.5, 0.26 + bodies * 0.012) : 0.18
+        }
     }
     private var glide: Glide?
 
@@ -176,6 +206,9 @@ final class TypoCaretStage {
     }
 
     func barWillHide(style: FloatingBarHideStyle) {
+        // Typo already finished its leap while the bar lingered: the bar is
+        // going, so hand Typo back to it for next time.
+        if !performance.isVisible, placement.mode == .caret { placement.mode = .bar }
         guard placement.mode == .caret, performance.isVisible, !isExiting, !pendingLeap else { return }
         let now = CACurrentMediaTime()
         guard style == .output, let start else {
@@ -183,19 +216,22 @@ final class TypoCaretStage {
             startTicking()
             return
         }
-        // Take off as the text lands instead of waiting for the app to report
-        // the new caret, so Typo is not left standing on the pasted words. The
-        // leap starts in place and learns its landing spot during the crouch.
+        // The text landed but no caret move was heard (an app that posts no
+        // notification): look once more, briefly, before pressing in place.
         pendingLeap = true
-        endGlide()
-        performance.finish(.leap(.zero), at: now)
-        placePanel(feet: [feet], arc: TypoPerformance.leapArc(for: .zero) * scale)
-        startTicking()
         let session = self.session
         Task { [weak self] in
             let target = await Self.caretAfterPaste(start: start)
             guard let self, self.session == session else { return }
-            self.land(on: target)
+            self.pendingLeap = false
+            let now = CACurrentMediaTime()
+            if let target {
+                self.leap(to: target, at: now)
+            } else {
+                DebugFileLogger.log("typo caret: no leap target, pressing in place")
+                self.performance.finish(.success, at: now)
+            }
+            self.startTicking()
         }
     }
 
@@ -283,10 +319,10 @@ final class TypoCaretStage {
 
     // MARK: - Leap
 
-    /// The app reports the new caret a moment after the paste, sometimes a few
-    /// hundred milliseconds. Look every 30 ms (a warm lookup costs 1-2 ms) until
-    /// the caret has moved, up to `pasteWait`.
-    private static let pasteWait: TimeInterval = 0.6
+    /// By the time the bar hides the text landed a while ago, so the caret is
+    /// normally reported already; look every 30 ms (a warm lookup costs 1-2 ms)
+    /// for a little longer in case the app is slow.
+    private static let pasteWait: TimeInterval = 0.3
 
     private static func caretAfterPaste(start: CaretLocation) async -> CaretLocation? {
         let deadline = ContinuousClock.now + .seconds(pasteWait)
@@ -303,28 +339,42 @@ final class TypoCaretStage {
         }
     }
 
-    private func land(on target: CaretLocation?) {
-        pendingLeap = false
-        guard let target,
-              let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: target.rect.midX, y: target.rect.midY)) })
-        else {
-            DebugFileLogger.log("typo caret: no leap target, flipping in place")
-            return
-        }
-        let scale = TypoCaretLayout.scale(bodyHeight: bodyHeight)
-        let landing = TypoCaretLayout.feet(beside: target.rect, textEnd: target.textEnd, field: target.field, bodyHeight: bodyHeight, screen: screen.visibleFrame)
+    /// Leaps from where Typo stands to beside `target`, the caret after the new
+    /// text. A leap already in the air takes the newer landing instead.
+    private func leap(to target: CaretLocation, at now: TimeInterval) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: target.rect.midX, y: target.rect.midY)) })
+        else { return }
+        endGlide()
+        start = target
+        let landing = TypoCaretLayout.feet(
+            beside: target.rect, textEnd: target.textEnd, field: target.field,
+            bodyHeight: bodyHeight, screen: screen.visibleFrame
+        )
         let offset = TypoCaretLayout.designOffset(from: feet, to: landing, scale: scale)
-        placePanel(feet: [feet, landing], arc: TypoPerformance.leapArc(for: offset) * scale)
-        performance.retarget(offset, at: CACurrentMediaTime())
+        if isLeaping {
+            performance.retarget(offset, at: now)
+        } else {
+            performance.gaze = TypoCaretLayout.gaze(feet: landing, caret: target.rect)
+            performance.finish(.leap(offset), at: now)
+        }
+        DebugFileLogger.log("typo caret: leap to \(Int(landing.x)),\(Int(landing.y)) air=\(String(format: "%.2f", performance.leap.air))s somersault=\(performance.leap.somersault)")
+        placePanel(feet: [feet, landing], arc: performance.leap.arc * scale)
+        startTicking()
+    }
+
+    private var isLeaping: Bool {
+        if case .exiting(.leap) = performance.stage { return true }
+        return false
     }
 
     // MARK: - Frames
 
     private func tick() {
         let now = CACurrentMediaTime()
-        if performance.isVisible, !isExiting, !pendingLeap {
-            followPhase(at: now)
-            followCaretIfDue(at: now)
+        if performance.isVisible, !pendingLeap {
+            if !isExiting { followPhase(at: now) }
+            // Keep listening for caret moves in the air too: the paste can land in steps.
+            if !isExiting || isLeaping { followCaretIfDue(at: now) }
         }
         performance.update(level: state.audioLevel.current, at: now)
         var pose = performance.pose(at: now)
@@ -340,8 +390,9 @@ final class TypoCaretStage {
             watcher?.stop()
             watcher = nil
             // Hand Typo back to the bar (and the Appearance preview) once the
-            // caret-side performance is over.
-            if placement.mode == .caret { placement.mode = .bar }
+            // caret-side performance is over, but not while the bar is still
+            // up after a leap: it would pop a second Typo onto the bar.
+            if placement.mode == .caret, state.barPhase == .hidden { placement.mode = .bar }
         }
     }
 
@@ -382,31 +433,41 @@ final class TypoCaretStage {
             let lookup = await CaretLocator.locate(processIdentifier: start.processIdentifier)
             guard let self, self.session == session else { return }
             self.followInFlight = false
-            guard let found = lookup.location, !self.isExiting, !self.pendingLeap,
+            guard let found = lookup.location, !self.pendingLeap,
                   let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: found.rect.midX, y: found.rect.midY)) })
             else { return }
-            let next = TypoCaretLayout.feet(beside: found.rect, textEnd: found.textEnd, field: found.field, bodyHeight: self.bodyHeight, screen: screen.visibleFrame)
-            guard hypot(next.x - self.feet.x, next.y - self.feet.y) > 2 else { return }
-            self.start = found
-            self.performance.gaze = TypoCaretLayout.gaze(feet: next, caret: found.rect)
-            self.move(to: next, at: CACurrentMediaTime())
+            let now = CACurrentMediaTime()
+            switch TypoCaretLayout.caretMove(during: self.performance.stage) {
+            case .walk:
+                let next = TypoCaretLayout.feet(beside: found.rect, textEnd: found.textEnd, field: found.field, bodyHeight: self.bodyHeight, screen: screen.visibleFrame)
+                guard hypot(next.x - self.feet.x, next.y - self.feet.y) > 2 else { return }
+                self.start = found
+                self.performance.gaze = TypoCaretLayout.gaze(feet: next, caret: found.rect)
+                self.move(to: next, at: now)
+            case .leap:
+                let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                guard let target = TypoCaretLayout.leapTarget(start: start, after: found, frontmost: frontmost) else { return }
+                self.leap(to: target, at: now)
+            case .ignore:
+                return
+            }
         }
     }
 
-    /// Slides or hops to `next`; a jump across the screen (a window moved or
-    /// the text scrolled far) is not a walk, so Typo just appears there.
+    /// Slides along the line, or hops when the caret changed lines or went
+    /// far, higher and a little longer the farther it goes. Only a move to
+    /// another screen is not a walk: there Typo just appears.
     private func move(to next: CGPoint, at now: TimeInterval) {
         let from = glide.map { glidePoint($0, at: now) } ?? feet
         feet = next
-        let distance = hypot(next.x - from.x, next.y - from.y)
-        guard !performance.reduceMotion, distance < bodyHeight * 12 else {
+        let sameScreen = NSScreen.screens.contains { $0.frame.contains(from) && $0.frame.contains(next) }
+        guard !performance.reduceMotion, sameScreen else {
             glide = nil
             placePanel(feet: [next])
             return
         }
-        let move = Glide(from: from, to: next, start: now, hops: abs(next.y - from.y) > 2)
-        let arc = move.hops ? TypoCaretLayout.followHop * TypoCaretLayout.scale(bodyHeight: bodyHeight) : 0
-        placePanel(feet: [from, next], arc: arc, standing: from)
+        let move = Glide(from: from, to: next, start: now, bodyHeight: bodyHeight)
+        placePanel(feet: [from, next], arc: move.hopHeight * TypoCaretLayout.scale(bodyHeight: bodyHeight), standing: from)
         glide = move
     }
 
@@ -429,7 +490,7 @@ final class TypoCaretStage {
             return 0
         }
         line = lineInPanel(glidePoint(g, at: now))
-        return g.hops ? CGFloat(sin(p * .pi)) * TypoCaretLayout.followHop : 0
+        return CGFloat(sin(p * .pi)) * g.hopHeight
     }
 
     private func endGlide() {
