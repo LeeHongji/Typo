@@ -1432,7 +1432,17 @@ final class AppState {
 
     // MARK: Floating Bar
 
-    var barPhase: FloatingBarPhase = .hidden
+    var barPhase: FloatingBarPhase = .hidden {
+        didSet {
+            guard barPhase != oldValue else { return }
+            // Quotes and screenshots are taken only while the user talks;
+            // once the bar is gone, whatever was not delivered is dropped.
+            if oldValue == .recording { DictationAttachments.shared.stopCollecting() }
+            if barPhase == .hidden { DictationAttachments.shared.end() }
+        }
+    }
+    /// Whether this recording brings in quotes and screenshots (dictation only).
+    @ObservationIgnored private var collectsAttachments = false
     var segments: [TranscriptionSegment] = []
     var currentMode: ProcessingMode
     var recordingProvider: ASRProvider? = nil
@@ -1579,6 +1589,7 @@ final class AppState {
     // MARK: Actions
 
     func startRecording(showsPanel: Bool = true) {
+        collectsAttachments = showsPanel
         captureRecordingMetadata()
         activityKind = .standard
         latestReviseUndoTicketID = nil
@@ -1603,6 +1614,7 @@ final class AppState {
     }
 
     func startReviseRecording() {
+        collectsAttachments = false
         captureRecordingMetadata()
         activityKind = .revise
         latestReviseUndoTicketID = nil
@@ -1636,6 +1648,14 @@ final class AppState {
         recordingStartDate = Date()
         recordingReadyGeneration = generation
         barPhase = .recording
+        if collectsAttachments,
+           let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            DictationAttachments.shared.begin(
+                targetPID: front.processIdentifier,
+                targetWindowID: DictationDestination.frontWindowID(of: front.processIdentifier)
+            )
+        }
     }
 
     func stopRecording(reason: StopRecordingReason = .user, suppressProcessingUI: Bool = false) {
@@ -1807,6 +1827,8 @@ final class AppState {
             switch outcome {
             case .copiedToClipboard:
                 message = L("处理失败，原文已保留至剪贴板", "Processing failed; raw text copied to clipboard")
+            case .copiedTargetGone:
+                message = L("处理失败，原输入框不在了，原文已复制", "Processing failed; the original box is gone, raw text copied")
             case .notInserted:
                 message = L("处理失败，未找到输入位置", "Processing failed; no editable field found")
             case .discarded:
@@ -1823,7 +1845,8 @@ final class AppState {
         } else if outcome == .inserted {
             dismissAfterOutput()
         } else {
-            feedbackKind = .standard
+            // Typo looks startled when the words could not go where they were meant to.
+            feedbackKind = outcome == .copiedTargetGone ? .warning : .standard
             showDone(message: outcome.completionMessage, delay: outcome.completionHoldDuration, outcomeForLog: "\(outcome)")
         }
         if shouldRevealSuppressedFinalization {

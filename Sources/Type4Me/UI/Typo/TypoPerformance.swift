@@ -117,6 +117,9 @@ struct TypoPerformance: Equatable {
     /// Typo's body while it listens: beats to the voice, fidgets, reactions.
     /// Stepped by `update`, so a pose reflects the last update before it.
     private(set) var motion = TypoMotion()
+    /// Quote and screenshot cards Typo holds, shown as a count beside it and
+    /// carried with it into the text.
+    private(set) var carried = 0
 
     init(timing: Timing = .standard, peek: Peek = .bar, reduceMotion: Bool = false) {
         self.timing = timing
@@ -143,7 +146,20 @@ struct TypoPerformance: Equatable {
             enter(.entering, at: t)
             resetVoice()
             motion = TypoMotion(seed: UInt64(truncatingIfNeeded: Int64((t * 1000).rounded())))
+            carried = 0
         case .entering, .listening, .thinking:
+            break
+        }
+    }
+
+    /// How many cards Typo holds now. One more than before is a catch.
+    mutating func carrying(_ count: Int, at t: TimeInterval) {
+        defer { carried = count }
+        guard count > carried else { return }
+        switch stage {
+        case .entering, .listening:
+            motion.caught(at: t, animated: !reduceMotion)
+        case .hidden, .thinking, .reacting, .exiting:
             break
         }
     }
@@ -337,6 +353,10 @@ struct TypoPerformance: Equatable {
         var spinDegrees: Double = 0
         var tiltDegrees: Double = 0
         var opacity: Double = 1
+        /// Cards held, drawn as a count at Typo's shoulder.
+        var badge = 0
+        /// The count fades as the cards go into the text on landing.
+        var badgeOpacity: Double = 1
     }
 
     func pose(at t: TimeInterval) -> Pose {
@@ -389,8 +409,25 @@ struct TypoPerformance: Equatable {
             pose.expression = Self.face(for: reaction)
         case .exiting(let exit):
             pose = exitPose(exit, age: age)
+            pose.badgeOpacity = badgeFade(exit, age: age)
         }
+        pose.badge = carried
         return pose
+    }
+
+    /// The cards ride along through a leap and go into the text with the
+    /// landing press; any other exit lets them fade at once.
+    private func badgeFade(_ exit: Exit, age: TimeInterval) -> Double {
+        if reduceMotion { return max(0, 1 - age / timing.reducedMotionFade) }
+        switch exit {
+        case .leap:
+            let landAt = timing.leapCrouch + leap.air
+            return max(0, min(1, 1 - (age - landAt) / timing.leapPress))
+        case .success:
+            return max(0, 1 - (age - timing.successHop) / timing.successPress)
+        case .cancelled, .failed:
+            return max(0, 1 - age / 0.12)
+        }
     }
 
     /// A slow breath while Typo waits: about 2% taller and shorter every 3 s.
@@ -466,6 +503,12 @@ struct TypoPerformance: Equatable {
                 e.eyeR = .ring
                 e.bubble = .exclaim
                 e.bubbleOpacity = 1
+            case .caught:
+                e.armL = .init(up: true, degrees: -18)
+                e.armR = .init(up: true, degrees: 60)
+                e.eyeL = .happy
+                e.eyeR = .happy
+                e.mouth = .grin
             }
         }
         return e

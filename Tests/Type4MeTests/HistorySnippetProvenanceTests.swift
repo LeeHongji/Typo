@@ -155,10 +155,24 @@ final class HistorySnippetProvenanceTests: XCTestCase {
         // Provenance columns, then the mode and target app columns added after them.
         let expected = previousColumns + [
             "post_snippet_text", "applied_snippets",
-            "processing_mode_id", "target_bundle_id", "target_app_name",
+            "processing_mode_id", "target_bundle_id", "target_app_name", "attachment_count",
         ]
         XCTAssertEqual(columnNames(at: freshPath), expected)
         XCTAssertEqual(columnNames(at: migratedPath), expected, "migration must append in the same order as a fresh schema")
+    }
+
+    func testOnlyTheNumberOfAttachmentsIsKept() async {
+        let store = HistoryStore(path: databasePath())
+        await store.insert(HistoryRecord(
+            id: "with-attachments", createdAt: Date(timeIntervalSince1970: 1_700_000_000), durationSeconds: 1,
+            rawText: "看这个", processingMode: nil, processedText: nil, finalText: "看这个",
+            status: "completed", characterCount: 3, asrProvider: "test", attachmentCount: 3
+        ))
+        await store.insert(record(id: "plain"))
+        let rows = await store.fetchAll()
+        XCTAssertEqual(rows.first { $0.id == "with-attachments" }?.attachmentCount, 3)
+        XCTAssertEqual(rows.first { $0.id == "with-attachments" }?.finalText, "看这个", "quotes are not saved with the words")
+        XCTAssertNil(rows.first { $0.id == "plain" }?.attachmentCount)
     }
 
     func testRowsFromBeforeProvenanceReadAsUnknownAfterMigration() async {

@@ -68,6 +68,7 @@ final class TypoDirector {
     func pose(for cue: TypoBuddyCue, level: Float, reduceMotion: Bool, at t: TimeInterval) -> TypoPerformance.Pose {
         apply(cue, reduceMotion: reduceMotion, at: t)
         performance.heard(cue.transcript, at: t)
+        performance.carrying(DictationAttachments.shared.carried(at: CACurrentMediaTime()), at: t)
         performance.update(level: level, at: t)
         return performance.pose(at: t)
     }

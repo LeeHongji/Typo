@@ -158,6 +158,8 @@ final class FloatingBarController {
     private var guideWindow: FloatingBarPlacementGuideWindow?
     /// Puts Typo beside the text caret when it can be found.
     private lazy var caretTypo = TypoCaretStage(state: state)
+    /// Quotes and screenshots brought in while talking, shown above the bar.
+    private var attachmentTray: DictationAttachmentTray?
 
     private struct DragSession {
         var grabOffset: CGVector
@@ -210,6 +212,7 @@ final class FloatingBarController {
         panel.contentView = hosting
         panel.setFrame(frame, display: false)
 
+        attachmentTray = DictationAttachmentTray(bar: panel)
         state.onShowPanel = { [weak self] in self?.show() }
         state.onHidePanel = { [weak self] style in self?.hide(style: style) }
 

@@ -84,6 +84,9 @@ enum InjectionOutcome: Sendable, Equatable {
     /// The dictated result intentionally remains in the clipboard.
     case pasteAttemptedClipboardRetained
     case copiedToClipboard
+    /// The user left the place being dictated into and it could not be
+    /// brought back, so nothing was pasted; the words are in the clipboard.
+    case copiedTargetGone
     case notInserted
     case discarded
 
@@ -98,6 +101,8 @@ enum InjectionOutcome: Sendable, Equatable {
             )
         case .copiedToClipboard:
             return L("已粘贴到剪贴板", "Copied to clipboard")
+        case .copiedTargetGone:
+            return L("已复制，原输入框不在了", "Copied — the original box is gone")
         case .notInserted:
             return L("未找到可输入的位置", "No editable field found")
         case .discarded:
@@ -109,6 +114,8 @@ enum InjectionOutcome: Sendable, Equatable {
         switch self {
         case .copiedToClipboard, .pasteAttemptedClipboardRetained, .notInserted:
             return .milliseconds(1500)
+        case .copiedTargetGone:
+            return .milliseconds(2200)
         case .discarded, .inserted:
             return .milliseconds(500)
         }

@@ -38,6 +38,9 @@ struct HistoryRecord: Identifiable, Hashable {
     /// The app the text was written into, captured when the record was saved.
     let targetBundleId: String?
     let targetAppName: String?
+    /// How many quotes and screenshots went out with the words. Only the
+    /// number is kept, never their contents.
+    let attachmentCount: Int?
 
     init(
         id: String,
@@ -64,7 +67,8 @@ struct HistoryRecord: Identifiable, Hashable {
         appliedSnippets: [AppliedSnippetRule]? = nil,
         processingModeId: String? = nil,
         targetBundleId: String? = nil,
-        targetAppName: String? = nil
+        targetAppName: String? = nil,
+        attachmentCount: Int? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -91,6 +95,7 @@ struct HistoryRecord: Identifiable, Hashable {
         self.processingModeId = processingModeId
         self.targetBundleId = targetBundleId
         self.targetAppName = targetAppName
+        self.attachmentCount = attachmentCount
     }
 }
 

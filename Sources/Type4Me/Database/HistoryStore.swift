@@ -57,7 +57,8 @@ actor HistoryStore {
                 applied_snippets TEXT,
                 processing_mode_id TEXT,
                 target_bundle_id TEXT,
-                target_app_name TEXT
+                target_app_name TEXT,
+                attachment_count INTEGER
             );
             """
             sqlite3_exec(db, sql, nil, nil, nil)
@@ -180,6 +181,8 @@ actor HistoryStore {
             sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN processing_mode_id TEXT;", nil, nil, nil)
             sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN target_bundle_id TEXT;", nil, nil, nil)
             sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN target_app_name TEXT;", nil, nil, nil)
+            // Count of quotes and screenshots delivered with the words, appended last.
+            sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN attachment_count INTEGER;", nil, nil, nil)
 
             // Index for ORDER BY created_at DESC pagination
             sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_history_created_at ON recognition_history(created_at DESC);", nil, nil, nil)
@@ -258,8 +261,8 @@ actor HistoryStore {
     func insert(_ record: HistoryRecord) {
         let sql = """
         INSERT OR REPLACE INTO recognition_history
-        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model, intelli_sense_trace, llm_provider, llm_model, asr_duration_seconds, llm_duration_seconds, user_edited_text, user_edit_status, user_edit_observed_at, user_edit_version, post_snippet_text, applied_snippets, processing_mode_id, target_bundle_id, target_app_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model, intelli_sense_trace, llm_provider, llm_model, asr_duration_seconds, llm_duration_seconds, user_edited_text, user_edit_status, user_edit_observed_at, user_edit_version, post_snippet_text, applied_snippets, processing_mode_id, target_bundle_id, target_app_name, attachment_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -299,6 +302,11 @@ actor HistoryStore {
         bindOptional(stmt, 23, record.processingModeId)
         bindOptional(stmt, 24, record.targetBundleId)
         bindOptional(stmt, 25, record.targetAppName)
+        if let count = record.attachmentCount {
+            sqlite3_bind_int(stmt, 26, Int32(count))
+        } else {
+            sqlite3_bind_null(stmt, 26)
+        }
         if sqlite3_step(stmt) == SQLITE_DONE {
             postDidChangeNotification()
         }
@@ -422,7 +430,8 @@ actor HistoryStore {
                 appliedSnippets: Self.decodeAppliedSnippets(optionalColumn(stmt, 21)),
                 processingModeId: optionalColumn(stmt, 22),
                 targetBundleId: optionalColumn(stmt, 23),
-                targetAppName: optionalColumn(stmt, 24)
+                targetAppName: optionalColumn(stmt, 24),
+                attachmentCount: sqlite3_column_count(stmt) > 25 ? optionalIntColumn(stmt, 25) : nil
             ))
         }
         return records

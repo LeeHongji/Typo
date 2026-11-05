@@ -174,6 +174,8 @@ struct TypoMotion: Equatable {
         case exclaim
         /// Talking again after dozing off.
         case wake
+        /// A quote or screenshot card flew in: arms up to catch it, eyes smiling.
+        case caught
     }
 
     /// Without a beat for this long Typo rests, and fidgets now and then.
@@ -181,7 +183,7 @@ struct TypoMotion: Equatable {
     static let fidgetLength: TimeInterval = 0.9
     /// Quiet this long and Typo dozes off.
     static let dozeAfter: TimeInterval = 8
-    static let cueLength: [Cue: TimeInterval] = [.nod: 0.4, .question: 1.0, .exclaim: 0.7, .wake: 0.45]
+    static let cueLength: [Cue: TimeInterval] = [.nod: 0.4, .question: 1.0, .exclaim: 0.7, .wake: 0.45, .caught: 0.7]
     static let nodGap: TimeInterval = 0.5
 
     var rhythm = TypoRhythm()
@@ -282,6 +284,17 @@ struct TypoMotion: Equatable {
         } else if cue == nil || t - cueStart >= Self.nodGap {
             if cue == nil { show(.nod, at: t) }
             if animated { squash.kick(-1.2) }
+        }
+    }
+
+    /// A card reached Typo.
+    mutating func caught(at t: TimeInterval, animated: Bool) {
+        show(.caught, at: t)
+        restingSince = nil
+        fidget = nil
+        if animated {
+            hop.kick(4200)
+            squash.kick(1.2)
         }
     }
 

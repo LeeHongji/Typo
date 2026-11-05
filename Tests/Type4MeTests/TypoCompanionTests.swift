@@ -670,7 +670,12 @@ final class TypoSpriteTests: XCTestCase {
         pose.expression.bubble = .question
         pose.expression.bubbleOpacity = 1
         view.update(pose: pose, line: CGPoint(x: 40, y: 70), scale: 0.05)
-        XCTAssertEqual(view.layer?.sublayers?.count, 2, "shadow and Typo")
+        XCTAssertEqual(view.layer?.sublayers?.count, 3, "shadow, Typo, and the count of cards it holds")
+        XCTAssertEqual(view.layer?.sublayers?.last?.isHidden, true, "no count without cards")
+        pose.badge = 2
+        view.update(pose: pose, line: CGPoint(x: 40, y: 70), scale: 0.05)
+        XCTAssertEqual(view.layer?.sublayers?.last?.isHidden, false, "two cards held: the count shows")
+        pose.badge = 0
         view.clip = .behind(CGRect(x: 0, y: 50, width: 140, height: 40), cornerRadius: 20)
         view.update(pose: pose, line: CGPoint(x: 40, y: 50), scale: 0.05)
         pose.opacity = 0

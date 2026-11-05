@@ -156,6 +156,8 @@ final class TypoSpriteView: NSView {
     private let bubbleLayer = CALayer()
     private let bodyLayer = CALayer()
     private let capsuleMask = CAShapeLayer()
+    private let badgeLayer = CALayer()
+    private let badgeText = CATextLayer()
     private var shownBody: TypoExpression?
     private var shownGlyph: TypoExpression.Glyph?
 
@@ -171,6 +173,12 @@ final class TypoSpriteView: NSView {
         clipLayer.addSublayer(bodyLayer)
         layer?.addSublayer(shadowLayer)
         layer?.addSublayer(clipLayer)
+        badgeLayer.backgroundColor = NSColor.white.cgColor
+        badgeLayer.borderColor = NSColor.black.cgColor
+        badgeText.foregroundColor = NSColor.black.cgColor
+        badgeText.alignmentMode = .center
+        badgeLayer.addSublayer(badgeText)
+        layer?.addSublayer(badgeLayer)
         capsuleMask.fillRule = .evenOdd
         applyClipShape()
         hide()
@@ -191,6 +199,38 @@ final class TypoSpriteView: NSView {
     private func hide() {
         shadowLayer.isHidden = true
         clipLayer.isHidden = true
+        badgeLayer.isHidden = true
+    }
+
+    /// Where the count of held cards sits: on Typo's upper-left shoulder, in
+    /// design units from its feet, moved with every hop, tilt and somersault.
+    static let badgeAnchor = CGPoint(x: -400, y: -660)
+
+    private func updateBadge(_ pose: TypoPerformance.Pose, motion: CGAffineTransform, line: CGPoint, scale: CGFloat) {
+        let opacity = pose.opacity * pose.badgeOpacity
+        let p = Self.badgeAnchor.applying(motion)
+        // Below the line it stands on the badge is hidden with Typo's body.
+        guard pose.badge > 0, opacity > 0.01, p.y < -60 else {
+            badgeLayer.isHidden = true
+            return
+        }
+        let diameter = max(14, 200 * scale)
+        let height = bounds.height
+        badgeLayer.isHidden = false
+        badgeLayer.opacity = Float(opacity)
+        badgeLayer.frame = CGRect(
+            x: line.x + p.x * scale - diameter / 2,
+            y: height - (line.y + p.y * scale) - diameter / 2,
+            width: diameter, height: diameter
+        )
+        badgeLayer.cornerRadius = diameter / 2
+        badgeLayer.borderWidth = max(1.2, diameter * 0.09)
+        let fontSize = diameter * 0.6
+        badgeText.contentsScale = backingScale
+        badgeText.font = NSFont.systemFont(ofSize: fontSize, weight: .heavy)
+        badgeText.fontSize = fontSize
+        badgeText.string = pose.badge > 9 ? "9+" : "\(pose.badge)"
+        badgeText.frame = CGRect(x: 0, y: (diameter - fontSize * 1.2) / 2, width: diameter, height: fontSize * 1.2)
     }
 
     private func applyClipShape() {
@@ -281,6 +321,7 @@ final class TypoSpriteView: NSView {
             layer.contentsScale = backing
         }
         bodyLayer.setAffineTransform(motion)
+        updateBadge(pose, motion: TypoRenderer.motion(of: pose), line: line, scale: scale)
 
         let key = TypoSpriteSet.bodyKey(pose.expression)
         if key != shownBody {

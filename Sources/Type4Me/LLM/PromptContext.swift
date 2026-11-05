@@ -170,7 +170,7 @@ struct PromptContext: Sendable {
     }
 
     @MainActor
-    private static func readSelectedTextByTemporaryCopy(timeoutMs: Int) async -> String {
+    static func readSelectedTextByTemporaryCopy(timeoutMs: Int) async -> String {
         guard AXIsProcessTrusted() else { return "" }
 
         let pasteboard = NSPasteboard.general

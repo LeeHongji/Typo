@@ -87,6 +87,14 @@ enum TypoCaretLayout {
         }
     }
 
+    /// Whether a caret read now is still in the text box locked at the start.
+    /// A box grows as it fills, so overlapping is enough; without box frames
+    /// there is nothing to tell them apart by.
+    static func isSameBox(_ locked: CGRect?, _ now: CGRect?) -> Bool {
+        guard let locked, let now else { return true }
+        return locked.insetBy(dx: -4, dy: -4).intersects(now)
+    }
+
     /// Which way Typo looks for the new text: it appears at the caret.
     static func gaze(feet: CGPoint, caret: CGRect) -> CGFloat {
         feet.x >= caret.maxX ? -1 : 1
@@ -393,6 +401,11 @@ final class TypoCaretStage {
             if !isExiting || isLeaping { followCaretIfDue(at: now) }
         }
         performance.heard(state.transcriptionText, at: now)
+        let attachments = DictationAttachments.shared
+        performance.carrying(attachments.carried(at: now), at: now)
+        // Cards fly to Typo's chest while it stands by the caret.
+        attachments.caretCatchPoint = performance.isVisible && !isExiting
+            ? CGPoint(x: feet.x, y: feet.y + bodyHeight * 0.6) : nil
         performance.update(level: state.audioLevel.current, at: now)
         var pose = performance.pose(at: now)
         pose.expression.bubbleScale = TypoCaretLayout.bubbleScale
@@ -414,13 +427,9 @@ final class TypoCaretStage {
     }
 
     private func followPhase(at now: TimeInterval) {
-        if let pid = start?.processIdentifier,
-           NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
-            // The user moved to another app: bow out here and let the bar's Typo carry on.
-            performance.finish(.cancelled, at: now)
-            placement.mode = .bar
-            return
-        }
+        // The words go to the place locked when recording started, even while
+        // the user visits other windows to quote or screenshot them, so Typo
+        // keeps standing there and waits for them.
         switch state.barPhase {
         case .preparing, .recording:
             performance.begin(at: now)
@@ -461,6 +470,9 @@ final class TypoCaretStage {
             let now = CACurrentMediaTime()
             switch TypoCaretLayout.caretMove(during: self.performance.stage) {
             case .walk:
+                // A caret in another box (another window clicked to screenshot
+                // it, say) is not where the words go; Typo stays at the locked one.
+                guard TypoCaretLayout.isSameBox(start.field, found.field) else { return }
                 let next = TypoCaretLayout.feet(beside: found.rect, textEnd: found.textEnd, field: found.field, bodyHeight: self.bodyHeight, screen: screen.visibleFrame)
                 guard hypot(next.x - self.feet.x, next.y - self.feet.y) > 2 else { return }
                 self.start = found

@@ -234,6 +234,46 @@ final class TextInjectionEngine: @unchecked Sendable {
         retention == .restoreOriginal
     }
 
+    /// Pastes screenshots after the words, one at a time, into the place the
+    /// words just went. A terminal takes no images, so it gets each file's
+    /// path instead. Call right after `inject` and before
+    /// `finishClipboardRestore`; the clipboard saved for the words is the one
+    /// put back afterwards, and with a retained result the words end up in it.
+    func pasteScreenshots(_ urls: [URL], asPaths: Bool, retainedText: String?) {
+        guard !urls.isEmpty else { return }
+        let pb = NSPasteboard.general
+        if asPaths {
+            let paths = urls.map { DictationDelivery.shellQuoted($0.path) }.joined(separator: " ")
+            pb.clearContents()
+            pb.setString(" " + paths, forType: .string)
+            pb.setData(Data(), forType: PasteboardHistoryPolicy.transientType)
+            usleep(50_000)
+            _ = simulatePaste()
+            usleep(150_000)
+        } else {
+            for url in urls {
+                guard let png = try? Data(contentsOf: url) else { continue }
+                pb.clearContents()
+                let item = NSPasteboardItem()
+                item.setData(png, forType: .png)
+                if let tiff = NSImage(data: png)?.tiffRepresentation { item.setData(tiff, forType: .tiff) }
+                item.setData(Data(), forType: PasteboardHistoryPolicy.transientType)
+                pb.writeObjects([item])
+                usleep(50_000)
+                _ = simulatePaste()
+                // Rich editors take a moment to read an image off the clipboard.
+                usleep(250_000)
+            }
+        }
+        if let pending = pendingClipboardRestore {
+            // The saved clipboard still goes back; only the count it checks moved on.
+            pendingClipboardRestore = PendingClipboardRestore(snapshot: pending.snapshot, changeCount: pb.changeCount)
+        } else if let retainedText {
+            copyToClipboard(retainedText)
+        }
+        DebugFileLogger.log("injection: pasted \(urls.count) screenshot(s) as \(asPaths ? "paths" : "images")")
+    }
+
 
     private func simulatePaste() -> Bool {
         let vKeyCode: CGKeyCode = 9 // 'v'

@@ -805,6 +805,8 @@ actor RecognitionSession {
     private var targetBundleId: String?
     /// The frontmost application captured when recording starts, used to restore focus if needed.
     private var targetApplication: NSRunningApplication?
+    /// The window and text box the words go to, locked when recording starts.
+    private var destination: DictationDestination?
 
     /// The app a history record is attributed to: where the text actually
     /// landed when known, otherwise the app focused at recording start.
@@ -1084,9 +1086,11 @@ actor RecognitionSession {
         if isSelf {
             targetApplication = nil
             targetBundleId = nil
+            destination = nil
         } else {
             targetApplication = frontmostApplication
             targetBundleId = frontmostApplication?.bundleIdentifier
+            destination = frontmostApplication.map(DictationDestination.capture)
         }
         let provider = KeychainService.selectedASRProvider
         activeProvider = provider
@@ -2661,8 +2665,17 @@ actor RecognitionSession {
             #endif
 
             let targetApp = targetApplication
+            // Automation and typed (manual) input keep their own ways to reach the target.
+            let lockedDestination = (isAutomation || isManualInput) ? nil : destination
             let manualInputHasNoTarget = isManualInput && targetApp == nil
-            let injectLog = "stop: injecting method=clipboard len=\(finalText.count) +\(ContinuousClock.now - stopT0)"
+            // What the user brought in while talking goes out with the words;
+            // a cancel leaves it for the bar to discard.
+            let delivery = wasCancelled
+                ? DictationDelivery()
+                : await MainActor.run { DictationAttachments.shared.takeForDelivery() }
+            let deliveredText = DictationDelivery.text(speech: finalText, quotes: delivery.quotes)
+            let screenshotsAsPaths = DictationDelivery.pastesPaths(into: targetApp?.bundleIdentifier)
+            let injectLog = "stop: injecting method=clipboard len=\(finalText.count) quotes=\(delivery.quotes.count) screenshots=\(delivery.screenshots.count) +\(ContinuousClock.now - stopT0)"
             let injectionResult: TrackedInjectionResult = await withCheckedContinuation { continuation in
                 Task.detached {
                     let result: TrackedInjectionResult
@@ -2685,10 +2698,35 @@ actor RecognitionSession {
                             hasCapturedTarget: targetApp != nil,
                             isTerminated: targetApp?.isTerminated ?? false
                         )
-                        let allowInjection: Bool
+                        var allowInjection: Bool
+                        var targetGone = false
                         switch plan {
                         case .injectIntoCurrentFrontmost:
                             allowInjection = true
+                            // The user may have gone to another window while talking
+                            // (to screenshot or quote it): bring the locked place back
+                            // and check it before pasting, never paste blind.
+                            if let lockedDestination {
+                                switch lockedDestination.plan() {
+                                case .pasteHere:
+                                    break
+                                case .refocus:
+                                    let refocused = lockedDestination.refocus()
+                                    DebugFileLogger.log("stop: destination refocused=\(refocused)")
+                                case .bringBack:
+                                    switch lockedDestination.bringBack(activate: RecognitionSession.activateAndConfirmFrontmost) {
+                                    case .success:
+                                        DebugFileLogger.log("stop: destination brought back")
+                                    case .failure(let failure):
+                                        DebugFileLogger.log("stop: destination not brought back (\(failure.rawValue))")
+                                        allowInjection = false
+                                        targetGone = true
+                                    }
+                                case .gone:
+                                    allowInjection = false
+                                    targetGone = true
+                                }
+                            }
                         case .activateAndConfirm:
                             allowInjection = targetApp.map(RecognitionSession.activateAndConfirmFrontmost) ?? false
                         case .failSafeClipboard:
@@ -2696,7 +2734,8 @@ actor RecognitionSession {
                         }
                         if allowInjection {
                             DebugFileLogger.log(injectLog)
-                            if shouldTrackInjection {
+                            // Quotes change what was pasted, so the words alone can't be tracked.
+                            if shouldTrackInjection && delivery.quotes.isEmpty {
                                 result = engine.injectTracked(
                                     finalText,
                                     sourceText: rawText,
@@ -2706,15 +2745,26 @@ actor RecognitionSession {
                                 )
                             } else {
                                 result = TrackedInjectionResult(
-                                    outcome: engine.inject(finalText),
+                                    outcome: engine.inject(deliveredText),
                                     observationContext: nil
                                 )
                             }
+                            if result.outcome == .inserted {
+                                engine.pasteScreenshots(
+                                    delivery.screenshots,
+                                    asPaths: screenshotsAsPaths,
+                                    retainedText: retainsClipboardResult ? deliveredText : nil
+                                )
+                            }
+                        } else if targetGone {
+                            engine.copyToClipboard(deliveredText)
+                            DebugFileLogger.log("stop: destination gone; retained in clipboard, paste skipped")
+                            result = TrackedInjectionResult(outcome: .copiedTargetGone, observationContext: nil)
                         } else {
                             // Fail-safe: the intended target is gone or never became
                             // frontmost, so pasting now could leak the dictated text
                             // into the wrong app. Retain it in the clipboard instead.
-                            engine.copyToClipboard(finalText)
+                            engine.copyToClipboard(deliveredText)
                             let reason = plan == .failSafeClipboard
                                 ? "target terminated"
                                 : "target focus unconfirmed"
@@ -2782,7 +2832,8 @@ actor RecognitionSession {
                 appliedSnippets: historySnippetApplication?.appliedRules,
                 processingModeId: currentMode.id.uuidString,
                 targetBundleId: recordTarget.bundleId,
-                targetAppName: recordTarget.appName
+                targetAppName: recordTarget.appName,
+                attachmentCount: delivery.isEmpty ? nil : delivery.count
             ))
             if injectionResult.outcome == .inserted,
                let context = injectionResult.observationContext {
