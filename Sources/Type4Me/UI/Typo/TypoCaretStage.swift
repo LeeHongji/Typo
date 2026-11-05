@@ -67,6 +67,18 @@ enum TypoCaretLayout {
         case ignore
     }
 
+    /// How often the caret is re-read even when the app reports no change.
+    /// Once the words are coming, a text box that grows, wraps or scrolls
+    /// moves the caret on screen without telling anyone, so Typo looks often
+    /// until it has landed; while the user talks, once a second is enough.
+    static func pollInterval(during stage: TypoPerformance.Stage) -> TimeInterval {
+        switch stage {
+        case .exiting(.leap): return 0.04
+        case .thinking, .reacting: return 0.08
+        case .hidden, .entering, .listening, .exiting: return 1.0
+        }
+    }
+
     static func caretMove(during stage: TypoPerformance.Stage) -> CaretMove {
         switch stage {
         case .entering, .listening: return .walk
@@ -156,11 +168,9 @@ final class TypoCaretStage {
     private var pendingLeap = false
     private var followInFlight = false
     private var lastFollow: TimeInterval = 0
+    private var lastRaise: TimeInterval = 0
     private var panelFrame: CGRect = .zero
     private var watcher: CaretWatcher?
-    /// With a watcher a caret move is heard at once; this is only a safety net
-    /// for what sends no notification, such as scrolling.
-    private static let safetyFollow: TimeInterval = 1.0
     /// Fastest the caret is re-read after a notification.
     private static let followGap: TimeInterval = 0.03
     /// A move to a new caret position: a short slide along the line, or a
@@ -323,8 +333,10 @@ final class TypoCaretStage {
 
     /// By the time the bar hides the text landed a while ago, so the caret is
     /// normally reported already; look every 30 ms (a warm lookup costs 1-2 ms)
-    /// for a little longer in case the app is slow.
-    private static let pasteWait: TimeInterval = 0.3
+    /// for longer in case the app is slow. Chromium and Electron can report a
+    /// stale value, or focus on a bare text node or web area, for most of a
+    /// second after a paste before their accessibility tree catches up.
+    static let pasteWait: TimeInterval = 1.0
 
     private static func caretAfterPaste(start: CaretLocation) async -> CaretLocation? {
         let deadline = ContinuousClock.now + .seconds(pasteWait)
@@ -334,6 +346,8 @@ final class TypoCaretStage {
             first = false
             let frontmost = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
             if let target = TypoCaretLayout.leapTarget(start: start, after: lookup.location, frontmost: frontmost) {
+                let waited = Int((ContinuousClock.now - (deadline - .seconds(pasteWait))) / .milliseconds(1))
+                DebugFileLogger.log("typo caret: landing found \(waited)ms after the bar hid")
                 return target
             }
             guard frontmost == start.processIdentifier, ContinuousClock.now < deadline else { return nil }
@@ -421,15 +435,20 @@ final class TypoCaretStage {
         }
     }
 
-    /// Re-reads the caret when the app says it moved, and once a second regardless
-    /// so Typo also follows scrolling or a moved window.
+    /// Re-reads the caret when the app says it moved, and on `pollInterval`
+    /// regardless, so Typo also follows scrolling, a moved window, or a text
+    /// box that reflows as the words land.
     private func followCaretIfDue(at now: TimeInterval) {
         guard !followInFlight, let start else { return }
         let heard = now - lastFollow >= Self.followGap && watcher?.takeChange() == true
-        guard heard || now - lastFollow >= Self.safetyFollow else { return }
+        guard heard || now - lastFollow >= TypoCaretLayout.pollInterval(during: performance.stage) else { return }
         lastFollow = now
-        // Floating panels of other apps can rise above Typo; keep it on top.
-        panel?.orderFrontRegardless()
+        // Floating panels of other apps can rise above Typo; keep it on top,
+        // checking about once a second rather than on every quick re-read.
+        if now - lastRaise >= 1 {
+            lastRaise = now
+            panel?.orderFrontRegardless()
+        }
         followInFlight = true
         let session = self.session
         Task { [weak self] in

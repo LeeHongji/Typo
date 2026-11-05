@@ -185,6 +185,27 @@ final class TypoCaretLayoutTests: XCTestCase {
         XCTAssertEqual(TypoCaretLayout.caretMove(during: .hidden), .ignore)
     }
 
+    func testOnceTheWordsAreComingTheCaretIsReadOftenWithoutWaitingForNotice() {
+        // Regression: a text box that grows, wraps or scrolls as the words land
+        // moves the caret on screen without any notification. Read only once
+        // a second, Typo had landed on the caret's old place before the newer
+        // one arrived (Cursor: 588,157, then 1107,219 a second later).
+        let leap = TypoCaretLayout.pollInterval(during: .exiting(.leap(.zero)))
+        XCTAssertLessThanOrEqual(leap, 0.05, "several reads during a leap's flight and settle")
+        XCTAssertLessThanOrEqual(TypoCaretLayout.pollInterval(during: .thinking), 0.1)
+        XCTAssertLessThanOrEqual(TypoCaretLayout.pollInterval(during: .reacting(.done)), 0.1)
+        XCTAssertGreaterThanOrEqual(TypoCaretLayout.pollInterval(during: .listening), 0.5, "while talking, notices are enough")
+        XCTAssertGreaterThanOrEqual(TypoCaretLayout.pollInterval(during: .exiting(.cancelled)), 0.5)
+    }
+
+    @MainActor
+    func testTheLandingIsAwaitedLongerThanASlowAccessibilityTree() {
+        // Regression: Chrome and Typora reported a stale value, or focused a
+        // bare text node, for more than the 0.3 s Typo waited after a paste,
+        // so it pressed in place instead of leaping.
+        XCTAssertGreaterThanOrEqual(TypoCaretStage.pasteWait, 0.8)
+    }
+
     func testLeapsOnlyWhenTheCaretMovedInTheSameApp() {
         let start = location(x: 300, y: 400)
         let moved = location(x: 520, y: 400)
