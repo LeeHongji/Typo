@@ -132,39 +132,6 @@ final class TypoCaretLayoutTests: XCTestCase {
         XCTAssertEqual(TypoCaretLayout.bodyHeight(forCaretHeight: 60), 30)
     }
 
-    func testWithoutACaretTypoPerchesOnTheBoxTowardItsRightEnd() {
-        let box = CGRect(x: 200, y: 100, width: 600, height: 40)
-        let feet = TypoCaretLayout.feet(perch: .field(box), bodyHeight: 22, screen: screen)
-        XCTAssertEqual(feet.y, box.maxY, "stands on the box's top edge, leaving the box clear")
-        XCTAssertGreaterThan(feet.x, box.midX)
-        XCTAssertLessThan(feet.x, box.maxX)
-    }
-
-    func testWithOnlyAWindowTypoStandsInsideItsBottomRightCorner() {
-        let window = CGRect(x: 100, y: 80, width: 900, height: 600)
-        let feet = TypoCaretLayout.feet(perch: .window(window), bodyHeight: 22, screen: screen)
-        XCTAssertTrue(window.contains(feet))
-        XCTAssertGreaterThan(feet.x, window.maxX - 60)
-        XCTAssertLessThan(feet.y, window.minY + 30)
-    }
-
-    func testAPerchNeverPutsTypoOffTheScreen() {
-        let wide = CGRect(x: 0, y: -40, width: 1440, height: 400)
-        let feet = TypoCaretLayout.feet(perch: .window(wide), bodyHeight: 22, screen: screen)
-        XCTAssertLessThanOrEqual(feet.x + 22 * 1.7, screen.maxX)
-        XCTAssertGreaterThanOrEqual(feet.y, screen.minY)
-        let top = TypoCaretLayout.feet(perch: .field(CGRect(x: 300, y: 860, width: 400, height: 40)), bodyHeight: 22, screen: screen)
-        XCTAssertLessThanOrEqual(top.y + 22 * 1.7, screen.maxY, "a box at the top of the screen keeps Typo's head on it")
-    }
-
-    func testOnlyTextBoxSizedElementsArePerchedOn() {
-        let screens = [screen]
-        XCTAssertTrue(CaretLocator.isPlausibleField(CGRect(x: 100, y: 100, width: 500, height: 36), screens: screens))
-        XCTAssertFalse(CaretLocator.isPlausibleField(CGRect(x: 100, y: 100, width: 30, height: 30), screens: screens), "a button")
-        XCTAssertFalse(CaretLocator.isPlausibleField(CGRect(x: 0, y: 0, width: 1400, height: 860), screens: screens), "a whole pane")
-        XCTAssertFalse(CaretLocator.isPlausibleField(CGRect(x: 3000, y: 100, width: 500, height: 36), screens: screens), "off screen")
-    }
-
     func testTypoStandsJustAfterTheCaretOnItsBottomEdge() {
         let caret = CGRect(x: 300, y: 400, width: 1, height: 18)
         let feet = TypoCaretLayout.feet(beside: caret, bodyHeight: 32, screen: screen)

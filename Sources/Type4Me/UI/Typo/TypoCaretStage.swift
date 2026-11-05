@@ -56,28 +56,6 @@ enum TypoCaretLayout {
         return CGPoint(x: x, y: caret.minY)
     }
 
-    /// A line height for a perch, where no caret says how big the text is.
-    static let perchLineHeight: CGFloat = 17
-
-    /// Where Typo's feet go without a caret: on the top edge of the text box,
-    /// toward its right end (the box stays clear to type in); or, with only a
-    /// window, just inside its bottom-right corner, where chat and terminal
-    /// windows take their input. Always fully on the screen.
-    static func feet(perch: CaretLocator.Perch, bodyHeight: CGFloat, screen: CGRect) -> CGPoint {
-        let reach = bodyHeight * 1.7
-        let point: CGPoint
-        switch perch {
-        case .field(let box):
-            point = CGPoint(x: box.maxX - bodyHeight * 1.2, y: box.maxY)
-        case .window(let window):
-            point = CGPoint(x: window.maxX - bodyHeight * 1.6, y: window.minY + bodyHeight * 0.6)
-        }
-        return CGPoint(
-            x: min(max(point.x, screen.minX + bodyHeight * 1.1), screen.maxX - reach),
-            y: min(max(point.y, screen.minY + bodyHeight * 0.35), screen.maxY - bodyHeight * 1.7)
-        )
-    }
-
     /// What Typo does when the caret beside it moves.
     enum CaretMove: Equatable {
         /// The user moved it while talking: walk or hop along.
@@ -173,8 +151,6 @@ final class TypoCaretStage {
     private var timer: Timer?
     private var session = 0
     private var start: CaretLocation?
-    /// The app Typo is standing in, by its caret or perched on its box or window.
-    private var targetPID: pid_t?
     private var feet: CGPoint = .zero
     private var bodyHeight: CGFloat = TypoCaretLayout.bodyHeights.lowerBound
     private var pendingLeap = false
@@ -237,14 +213,8 @@ final class TypoCaretStage {
         if !performance.isVisible, placement.mode == .caret { placement.mode = .bar }
         guard placement.mode == .caret, performance.isVisible, !isExiting, !pendingLeap else { return }
         let now = CACurrentMediaTime()
-        guard style == .output else {
+        guard style == .output, let start else {
             performance.finish(exitAfterMessage, at: now)
-            startTicking()
-            return
-        }
-        guard let start else {
-            // Perched on a box or window: no caret to leap to, so press in place.
-            performance.finish(.success, at: now)
             startTicking()
             return
         }
@@ -298,20 +268,15 @@ final class TypoCaretStage {
 
     private func decide(_ lookup: CaretLookup, bundle: String) {
         let phase = state.barPhase
-        guard phase == .preparing || phase == .recording else {
-            placement.mode = .bar
-            return
-        }
-        guard let found = lookup.location,
+        guard phase == .preparing || phase == .recording, let found = lookup.location,
               let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: found.rect.midX, y: found.rect.midY)) })
         else {
             if case .unavailable(let reason) = lookup {
                 DebugFileLogger.log("typo caret: unavailable app=\(bundle) reason=\(reason)")
-                perchInstead(bundle: bundle)
-            } else {
-                if lookup == .secureField { DebugFileLogger.log("typo caret: secure field app=\(bundle)") }
-                placement.mode = .bar
+            } else if lookup == .secureField {
+                DebugFileLogger.log("typo caret: secure field app=\(bundle)")
             }
+            placement.mode = .bar
             return
         }
         DebugFileLogger.log(
@@ -321,46 +286,7 @@ final class TypoCaretStage {
         )
         start = found
         bodyHeight = TypoCaretLayout.bodyHeight(forCaretHeight: found.rect.height)
-        let at = TypoCaretLayout.feet(beside: found.rect, textEnd: found.textEnd, field: found.field, bodyHeight: bodyHeight, screen: screen.visibleFrame)
-        stand(at: at, pid: found.processIdentifier, gaze: TypoCaretLayout.gaze(feet: at, caret: found.rect), screen: screen)
-        watcher?.stop()
-        watcher = CaretWatcher(processIdentifier: found.processIdentifier)
-    }
-
-    /// No caret to stand by: stand on the text box or the window instead, so
-    /// Typo still marks where the words will go, rather than leaving for the bar.
-    private func perchInstead(bundle: String) {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
-            placement.mode = .bar
-            return
-        }
-        let session = self.session
-        Task { [weak self] in
-            let perch = await CaretLocator.perch(processIdentifier: pid)
-            guard let self, self.session == session else { return }
-            let phase = self.state.barPhase
-            let rect: CGRect? = switch perch {
-            case .field(let r), .window(let r): r
-            case nil: nil
-            }
-            guard let perch, let rect, phase == .preparing || phase == .recording,
-                  let screen = NSScreen.screens.first(where: { $0.frame.intersects(rect) })
-            else {
-                DebugFileLogger.log("typo caret: no perch app=\(bundle)")
-                self.placement.mode = .bar
-                return
-            }
-            self.start = nil
-            self.bodyHeight = TypoCaretLayout.bodyHeight(forCaretHeight: TypoCaretLayout.perchLineHeight)
-            let at = TypoCaretLayout.feet(perch: perch, bodyHeight: self.bodyHeight, screen: screen.visibleFrame)
-            DebugFileLogger.log("typo caret: perched app=\(bundle) on=\(perch) feet=\(Int(at.x)),\(Int(at.y))")
-            self.stand(at: at, pid: pid, gaze: -1, screen: screen)
-        }
-    }
-
-    private func stand(at point: CGPoint, pid: pid_t, gaze: CGFloat, screen: NSScreen) {
-        targetPID = pid
-        feet = point
+        feet = TypoCaretLayout.feet(beside: found.rect, textEnd: found.textEnd, field: found.field, bodyHeight: bodyHeight, screen: screen.visibleFrame)
         glide = nil
         placePanel(feet: [feet])
         if let frame = panel?.frame {
@@ -371,10 +297,12 @@ final class TypoCaretStage {
             )
         }
         performance = TypoPerformance(peek: .caret, reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-        performance.gaze = gaze
+        performance.gaze = TypoCaretLayout.gaze(feet: feet, caret: found.rect)
         performance.begin(at: CACurrentMediaTime())
         placement.mode = .caret
         lastFollow = CACurrentMediaTime()
+        watcher?.stop()
+        watcher = CaretWatcher(processIdentifier: found.processIdentifier)
         startTicking()
     }
 
@@ -472,7 +400,7 @@ final class TypoCaretStage {
     }
 
     private func followPhase(at now: TimeInterval) {
-        if let pid = targetPID,
+        if let pid = start?.processIdentifier,
            NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
             // The user moved to another app: bow out here and let the bar's Typo carry on.
             performance.finish(.cancelled, at: now)

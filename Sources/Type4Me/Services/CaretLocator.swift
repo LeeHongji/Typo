@@ -148,65 +148,6 @@ enum CaretLocator {
         return .unavailable("no plausible caret (role \(role))")
     }
 
-    // MARK: - Without a caret
-
-    /// Somewhere to stand when the caret cannot be read: the focused text box,
-    /// or else the focused window (AppKit coordinates).
-    enum Perch: Equatable, Sendable {
-        case field(CGRect)
-        case window(CGRect)
-    }
-
-    /// A box this size is a text box; smaller is a control, larger a whole pane.
-    static let perchFieldHeights: ClosedRange<CGFloat> = 14...240
-    static let perchFieldMinimumWidth: CGFloat = 60
-
-    static func perch(processIdentifier pid: pid_t, budget: TimeInterval = 0.4) async -> Perch? {
-        guard AXIsProcessTrusted() else { return nil }
-        let screens = NSScreen.screens.map(\.frame)
-        let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
-        return await withCheckedContinuation { continuation in
-            let answered = OSAllocatedUnfairLock(initialState: false)
-            let answer: @Sendable (Perch?) -> Void = { perch in
-                let first = answered.withLock { done in
-                    defer { done = true }
-                    return !done
-                }
-                if first { continuation.resume(returning: perch) }
-            }
-            queue.async {
-                answer(queryPerch(pid: pid, screens: screens, primaryMaxY: primaryMaxY))
-            }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + budget) { answer(nil) }
-        }
-    }
-
-    static func queryPerch(pid: pid_t, screens: [CGRect], primaryMaxY: CGFloat) -> Perch? {
-        let app = AXUIElementCreateApplication(pid)
-        AXUIElementSetMessagingTimeout(app, 0.2)
-        if let element = copyElement(app, kAXFocusedUIElementAttribute) {
-            if isSecure(element) { return nil }
-            if let box = frame(element) {
-                let rect = cocoaRect(fromAX: box, primaryMaxY: primaryMaxY)
-                if isPlausibleField(rect, screens: screens) { return .field(rect) }
-            }
-        }
-        if let window = copyElement(app, kAXFocusedWindowAttribute), let box = frame(window) {
-            let rect = cocoaRect(fromAX: box, primaryMaxY: primaryMaxY)
-            if rect.width >= 120, rect.height >= 80, screens.contains(where: { $0.intersects(rect) }) {
-                return .window(rect)
-            }
-        }
-        return nil
-    }
-
-    static func isPlausibleField(_ r: CGRect, screens: [CGRect]) -> Bool {
-        guard r.origin.x.isFinite, r.origin.y.isFinite,
-              r.width >= perchFieldMinimumWidth, perchFieldHeights.contains(r.height)
-        else { return false }
-        return screens.contains { $0.contains(CGPoint(x: r.midX, y: r.midY)) }
-    }
-
     // MARK: - Pure helpers
 
     /// AX uses a top-left origin on the primary display; AppKit uses bottom-left.
