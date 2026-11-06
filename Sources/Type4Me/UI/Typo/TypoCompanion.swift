@@ -55,6 +55,7 @@ struct TypoBuddyCue: Equatable {
     var feedbackKind: FeedbackKind
     /// The words recognized so far; Typo nods as they appear.
     var transcript: String = ""
+    var network: RecordingNetworkState = .normal
 }
 
 /// Turns bar cues into performance events. A class so the timeline can advance
@@ -67,6 +68,7 @@ final class TypoDirector {
 
     func pose(for cue: TypoBuddyCue, level: Float, reduceMotion: Bool, at t: TimeInterval) -> TypoPerformance.Pose {
         apply(cue, reduceMotion: reduceMotion, at: t)
+        performance.network = cue.network
         performance.heard(cue.transcript, at: t)
         performance.carrying(DictationAttachments.shared.carried(at: CACurrentMediaTime()), at: t)
         performance.update(level: level, at: t)
@@ -79,7 +81,7 @@ final class TypoDirector {
             if case .exiting = performance.stage { return }
             let exit: TypoPerformance.Exit
             switch (style, performance.stage) {
-            case (.output, _), (_, .reacting(.done)):
+            case (.output, _), (_, .reacting(.done)), (_, .reacting(.sheepish)):
                 exit = .success
             case (_, .reacting(.failed)):
                 exit = .failed
@@ -92,11 +94,11 @@ final class TypoDirector {
         switch cue.phase {
         case .preparing, .recording:
             performance.begin(at: t)
-        case .finishing, .processing, .recovering:
+        case .finishing, .processing:
             if !performance.isVisible { performance.begin(at: t) }
             performance.think(at: t)
         case .done:
-            performance.react(Self.reaction(for: cue.feedbackKind), at: t)
+            performance.react(Self.reaction(for: cue.feedbackKind, network: cue.network), at: t)
         case .error:
             performance.react(.failed, at: t)
         case .hidden:
@@ -105,10 +107,13 @@ final class TypoDirector {
         }
     }
 
-    static func reaction(for kind: FeedbackKind) -> TypoPerformance.Reaction {
+    static func reaction(for kind: FeedbackKind, network: RecordingNetworkState = .normal) -> TypoPerformance.Reaction {
         switch kind {
         case .standard, .macActionSuccess:
             return .done
+        case .warning where network != .normal:
+            // Only part of the words made it through a bad network.
+            return .sheepish
         case .warning, .macActionFailure, .macActionUnsure:
             return .failed
         }

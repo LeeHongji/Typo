@@ -38,9 +38,13 @@ struct HistoryRecord: Identifiable, Hashable {
     /// The app the text was written into, captured when the record was saved.
     let targetBundleId: String?
     let targetAppName: String?
-    /// How many quotes and screenshots went out with the words. Only the
-    /// number is kept, never their contents.
+    /// How many quotes and screenshots went out with the words.
     let attachmentCount: Int?
+    /// The quotes, the compressed screenshots' files, and the recording of an
+    /// unfinished dictation (`HistoryAttachments`).
+    let attachmentsJSON: String?
+
+    var attachments: HistoryAttachments? { HistoryAttachments.decode(attachmentsJSON) }
 
     init(
         id: String,
@@ -68,7 +72,8 @@ struct HistoryRecord: Identifiable, Hashable {
         processingModeId: String? = nil,
         targetBundleId: String? = nil,
         targetAppName: String? = nil,
-        attachmentCount: Int? = nil
+        attachmentCount: Int? = nil,
+        attachmentsJSON: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -96,6 +101,7 @@ struct HistoryRecord: Identifiable, Hashable {
         self.targetBundleId = targetBundleId
         self.targetAppName = targetAppName
         self.attachmentCount = attachmentCount
+        self.attachmentsJSON = attachmentsJSON
     }
 }
 
@@ -1044,7 +1050,12 @@ struct HistoryTab: View {
                     .frame(width: 62, alignment: .leading)
 
                     VStack(alignment: .leading, spacing: 7) {
-                        Text(record.finalText)
+                        // Quotes show where they went into the words, as on the bar.
+                        Text(HistoryQuotedText.attributed(
+                            record.finalText,
+                            quotes: record.attachments?.quotes ?? [],
+                            hasRecording: record.attachments?.recording != nil
+                        ))
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(TF.settingsText)
                             .lineLimit(isExpanded ? nil : 2)
@@ -1062,6 +1073,9 @@ struct HistoryTab: View {
                             }
                             if let source = historyASRDisplayDescription(record) {
                                 Label(source, systemImage: "mic")
+                            }
+                            if let attachments = record.attachments {
+                                HistoryAttachmentBadges(attachments: attachments)
                             }
                         }
                         .font(.system(size: 10, weight: .medium))
@@ -1197,6 +1211,10 @@ struct HistoryTab: View {
                         .foregroundStyle(TF.settingsTextSecondary)
                         .textSelection(.enabled)
                 }
+            }
+
+            if let attachments = record.attachments {
+                HistoryAttachmentsDetails(record: record, attachments: attachments)
             }
 
             if let trace = decodeIntelliSenseTrace(record.intelliSenseTraceJSON) {

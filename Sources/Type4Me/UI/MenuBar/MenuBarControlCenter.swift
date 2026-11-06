@@ -473,7 +473,7 @@ struct MenuBarControlCenterView: View {
         switch appState.barPhase {
         case .preparing, .recording:
             activeRecordingActions
-        case .finishing, .processing, .recovering:
+        case .finishing, .processing:
             processingActions
         case .error:
             errorFeedback
@@ -527,7 +527,7 @@ struct MenuBarControlCenterView: View {
     private var processingActions: some View {
         Label(
             appState.effectiveProcessingLabel,
-            systemImage: appState.barPhase == .recovering
+            systemImage: appState.networkState == .retrying
                 ? "arrow.triangle.2.circlepath"
                 : "circle.dotted"
         )
@@ -897,7 +897,7 @@ enum MenuBarPresentation {
         switch phase {
         case .hidden, .done, .error:
             return true
-        case .preparing, .recording, .finishing, .processing, .recovering:
+        case .preparing, .recording, .finishing, .processing:
             return false
         }
     }

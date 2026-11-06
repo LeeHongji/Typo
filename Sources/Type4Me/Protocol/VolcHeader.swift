@@ -133,7 +133,16 @@ protocol TerminalASRError: Error {
 
 extension VolcProtocolError: TerminalASRError {
     var isTerminalServerError: Bool {
-        if case .serverError = self { return true }
-        return false
+        guard case .serverError(let code, _) = self else { return false }
+        return !Self.isTransient(code: code)
+    }
+
+    /// Codes that say the network or the service hiccupped, not the account:
+    /// 45000081 is the server giving up on audio that a stalled upload never
+    /// delivered, 55xxxxxx are the service's own busy and internal errors.
+    /// The words heard so far are kept and the recording is recognized again.
+    static func isTransient(code: Int?) -> Bool {
+        guard let code else { return false }
+        return code == 45_000_081 || (55_000_000...55_999_999).contains(code)
     }
 }

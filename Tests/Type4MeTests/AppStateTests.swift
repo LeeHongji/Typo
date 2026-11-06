@@ -300,44 +300,59 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.effectiveProcessingLabel, appState.currentMode.processingLabel)
     }
 
-    func testShowRecoveryDisplaysPartialTextAndStatus() {
+    func testALostConnectionKeepsRecordingAndSaysSoAboveTheBar() {
         let appState = AppState()
+        appState.startRecording()
+        appState.markRecordingReady()
+        let message = "网络断了，继续说，松开后整段识别"
 
-        appState.showRecovery(
-            text: "已经识别的文字",
-            message: "连接中断，已保留当前文字，正在用整段录音重试"
-        )
+        appState.markConnectionLost(message: message)
 
-        XCTAssertEqual(appState.barPhase, .recovering)
-        XCTAssertEqual(appState.transcriptionText, "已经识别的文字")
-        XCTAssertEqual(appState.effectiveProcessingLabel, "连接中断，已保留当前文字，正在用整段录音重试")
+        XCTAssertEqual(appState.barPhase, .recording, "the user keeps talking")
+        XCTAssertEqual(appState.networkState, .lost)
+        XCTAssertEqual(DictationAttachments.shared.notice, .connectionLost(message))
+        appState.startRecording()
+        XCTAssertEqual(appState.networkState, .normal, "a new dictation starts with a clean slate")
     }
 
-    func testRecoveryPromptKeepsPartialTextVisible() {
+    func testWaitingCopySaysWhatIsHappeningInBothLanguages() {
+        let key = "tf_language"
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
         let appState = AppState()
-        appState.showRecovery(
-            text: "已经识别的文字",
-            message: "连接中断，已保留当前文字，正在用整段录音重试"
-        )
 
-        appState.showRecoveryPrompt(
-            text: "已经识别的文字",
-            message: "正在恢复上一次识别。继续按下将打断当前恢复并重新开始录音。"
-        )
+        UserDefaults.standard.set("zh", forKey: key)
+        appState.processingIsSlow = true
+        XCTAssertEqual(appState.effectiveProcessingLabel, "网络有点慢，还在等… Esc 取消")
+        appState.networkState = .retrying
+        XCTAssertEqual(appState.effectiveProcessingLabel, "正在用整段录音重新识别…")
 
-        XCTAssertEqual(appState.barPhase, .recovering)
-        XCTAssertEqual(appState.transcriptionText, "已经识别的文字")
-        XCTAssertEqual(appState.effectiveProcessingLabel, "正在恢复上一次识别。继续按下将打断当前恢复并重新开始录音。")
+        UserDefaults.standard.set("en", forKey: key)
+        XCTAssertEqual(appState.effectiveProcessingLabel, "Recognizing the whole recording again…")
+        appState.networkState = .normal
+        XCTAssertEqual(appState.effectiveProcessingLabel, "Network is slow, still waiting… Esc cancels")
     }
 
-    func testRecoveryResultPinsTranscriptPopup() {
+    func testPartlyRecognizedWordsGoInWithAWarningThatTheRecordingIsKept() {
+        let key = "tf_language"
+        let saved = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+        UserDefaults.standard.set("zh", forKey: key)
         let appState = AppState()
+        appState.startRecording()
+        appState.markRecordingReady()
+        appState.stopRecording()
 
-        appState.showRecoveryResult(text: "完整识别文字", message: "已恢复完整识别")
+        appState.finalize(text: "已识别的部分", outcome: .insertedPartial)
 
         XCTAssertEqual(appState.barPhase, .done)
-        XCTAssertEqual(appState.transcriptionText, "完整识别文字")
-        XCTAssertTrue(appState.pinsTranscriptPopup)
+        XCTAssertEqual(appState.feedbackKind, .warning)
+        XCTAssertEqual(appState.feedbackMessage, "网络不好，只识别到一部分，录音已存到历史，可重新识别")
+        UserDefaults.standard.set("en", forKey: key)
+        XCTAssertEqual(
+            InjectionOutcome.insertedPartial.completionMessage,
+            "Network was poor — only part was recognized. The recording is in history to try again."
+        )
     }
 
     func testStaticRecordingVisualKeepsHostPanelAliveForLivePreferenceChanges() {
@@ -713,12 +728,6 @@ final class AppStateTests: XCTestCase {
             LiveTranscriptDisplayPreference.showsTranscript(
                 isEnabled: false,
                 phase: .recording
-            )
-        )
-        XCTAssertTrue(
-            LiveTranscriptDisplayPreference.showsTranscript(
-                isEnabled: false,
-                phase: .recovering
             )
         )
         XCTAssertTrue(

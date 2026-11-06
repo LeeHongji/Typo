@@ -501,22 +501,7 @@ final class AppearancePreviewTests: XCTestCase {
         XCTAssertEqual(resolveRecordingDisplayText(isRevise: true, isNonRealtime: true, showsLiveTranscript: true, hasRealtimeSegments: false, transcriptionText: ""), "Say how to revise")
     }
 
-    func testResolveShowTranscriptPopup_recoveringAndHoverBehavior() {
-        // 1. In recovering phase with segments, popup must show even for non-realtime ASR (e.g. Groq batch)
-        let recoveryPopupForBatch = resolveShowTranscriptPopup(
-            usesCompactPresentation: false,
-            transcriptionText: "识别出的真实文本",
-            showsTranscriptInCurrentPhase: true,
-            isPinned: false,
-            phase: .recovering,
-            hasSegments: true,
-            hoverPreviewEnabled: true,
-            isHoverActive: false,
-            isNonRealtimeASR: true,
-            textOverflowsBar: false
-        )
-        XCTAssertTrue(recoveryPopupForBatch, "Recovery phase must show transcript popup even for non-realtime ASR")
-
+    func testResolveShowTranscriptPopup_pinnedAndHoverBehavior() {
         // 2. Pinned popup with segments shows regardless of non-realtime
         let pinnedPopup = resolveShowTranscriptPopup(
             usesCompactPresentation: false,
@@ -583,7 +568,7 @@ final class AppearancePreviewTests: XCTestCase {
             transcriptionText: "文本",
             showsTranscriptInCurrentPhase: true,
             isPinned: false,
-            phase: .recovering,
+            phase: .processing,
             hasSegments: true,
             hoverPreviewEnabled: true,
             isHoverActive: true,

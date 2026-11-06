@@ -6,7 +6,7 @@ import SwiftUI
 struct TypoExpression: Hashable {
     enum Eye: Hashable { case open, happy, relaxed, line, dot, ring, heart, chevron, angry, sad }
     enum Mouth: Hashable { case smile, grin, talk, shout, flat, frown, zigzag, tinyO, cat }
-    enum Glyph: Hashable { case dots, exclaim, question, interrobang, heart, zz, check, vein, note }
+    enum Glyph: Hashable { case dots, exclaim, question, interrobang, heart, zz, check, vein, note, offline, retry, hourglass }
 
     /// An arm is the traced reference stroke, optionally flipped upward about its
     /// shoulder end, then rotated clockwise by `degrees`.
@@ -349,6 +349,35 @@ enum TypoRenderer {
         case .interrobang: text("?!", 150)
         case .zz: text("Zz", 130)
         case .note: text("♪", 160)
+        case .retry: text("↻", 170)
+        case .offline:
+            // A signal's arcs with a stroke through them.
+            for (r, w) in [(CGFloat(78), CGFloat(20)), (CGFloat(46), CGFloat(20))] {
+                var arc = Path()
+                arc.addArc(center: CGPoint(x: 0, y: 40), radius: r, startAngle: .degrees(-140), endAngle: .degrees(-40), clockwise: false)
+                g.stroke(arc, with: white, style: StrokeStyle(lineWidth: w, lineCap: .round))
+            }
+            g.fill(Path(ellipseIn: CGRect(x: -13, y: 27, width: 26, height: 26)), with: white)
+            var slash = Path()
+            slash.move(to: CGPoint(x: -62, y: -58))
+            slash.addLine(to: CGPoint(x: 62, y: 58))
+            g.stroke(slash, with: white, style: StrokeStyle(lineWidth: 20, lineCap: .round))
+        case .hourglass:
+            var glass = Path()
+            glass.move(to: CGPoint(x: -44, y: -62))
+            glass.addLine(to: CGPoint(x: 44, y: -62))
+            glass.addLine(to: CGPoint(x: 0, y: 0))
+            glass.addLine(to: CGPoint(x: 44, y: 62))
+            glass.addLine(to: CGPoint(x: -44, y: 62))
+            glass.addLine(to: CGPoint(x: 0, y: 0))
+            glass.closeSubpath()
+            g.stroke(glass, with: white, style: StrokeStyle(lineWidth: 16, lineCap: .round, lineJoin: .round))
+            var sand = Path()
+            sand.move(to: CGPoint(x: -22, y: 52))
+            sand.addLine(to: CGPoint(x: 22, y: 52))
+            sand.addLine(to: CGPoint(x: 0, y: 28))
+            sand.closeSubpath()
+            g.fill(sand, with: white)
         case .heart:
             g.fill(heart(center: CGPoint(x: 0, y: 4), size: 140), with: white)
         case .check:

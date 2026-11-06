@@ -117,9 +117,6 @@ func resolveShowTranscriptPopup(
     if isPinned {
         return hasSegments
     }
-    if phase == .recovering {
-        return hasSegments
-    }
     guard hoverPreviewEnabled,
           isHoverActive,
           phase == .recording,
@@ -151,6 +148,8 @@ protocol FloatingBarState: AnyObject, Observable {
     /// True when recording with a non-realtime (batch or Qwen3-only) ASR engine.
     var isNonRealtimeASR: Bool { get }
     var effectiveProcessingLabel: String { get }
+    /// How the network has behaved this dictation; Typo's face follows it.
+    var networkState: RecordingNetworkState { get }
     var activityKind: RecordingActivityKind { get }
     var latestReviseUndoTicketID: UUID? { get }
     /// The mode's whole-block recording-display override. Nil when the mode
@@ -605,7 +604,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
             phase: state.barPhase,
             exitStyle: state.barPhase == .hidden ? chrome?.exitSnapshot?.hideStyle : nil,
             feedbackKind: presentedFeedbackKind,
-            transcript: state.transcriptionText
+            transcript: state.transcriptionText,
+            network: state.networkState
         )
     }
 
@@ -670,7 +670,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         switch presentedPhase {
         case .preparing, .recording, .finishing, .hidden:
             return TF.compactIndicatorWidth
-        case .processing, .recovering:
+        case .processing:
             let textW = measure(presentedProcessingLabel)
             return basePadding + iconWidth + textW
         case .done:
@@ -690,7 +690,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         switch presentedPhase {
         case .preparing, .recording, .finishing:
             return TF.compactIndicatorWidth
-        case .processing, .recovering, .done, .error:
+        case .processing, .done, .error:
             return min(TF.compactStatusMaxWidth, max(44.0, compactStatusIntrinsicWidth))
         case .hidden:
             return 0
@@ -732,8 +732,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
             return recordingPeakWidth
         case .processing:
             return min(TF.barWidth, max(110, measureText(presentedProcessingLabel) + 66.0))
-        case .recovering:
-            return min(TF.barWidth, measureText(presentedProcessingLabel) + 86.0)
         case .done:
             return feedbackWidth(for: presentedFeedbackMessage)
         case .error:
@@ -1059,9 +1057,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
             case .processing:
                 compactStatusContent(phase: .processing, text: presentedProcessingLabel)
                     .transition(.textSwap.animation(.easeInOut(duration: 0.15)))
-            case .recovering:
-                compactStatusContent(phase: .recovering, text: presentedProcessingLabel)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.18)))
             case .done:
                 compactDoneContent
                     .transition(.textSwap.animation(.easeInOut(duration: 0.15)))
@@ -1085,9 +1080,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
             case .processing:
                 processingContent
                     .transition(.textSwap.animation(.easeInOut(duration: 0.15)))
-            case .recovering:
-                recoveringContent
-                    .transition(.opacity.animation(.easeInOut(duration: 0.18)))
             case .done:
                 doneContent
                     .transition(.textSwap.animation(.easeInOut(duration: 0.15)))
@@ -1194,11 +1186,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
             ProgressView()
                 .scaleEffect(0.42)
                 .frame(width: 12, height: 12)
-        case .recovering:
-            Circle()
-                .fill(TF.recording)
-                .frame(width: 6, height: 6)
-                .shadow(color: TF.recording.opacity(0.4), radius: 2)
         case .error:
             if let icon = feedbackIcon {
                 Image(systemName: icon.symbol)
@@ -1456,25 +1443,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var recoveringContent: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(TF.recording)
-                .frame(width: 10, height: 10)
-                .shadow(color: TF.recording.opacity(0.4), radius: 3)
-
-            LiquidGlassText(
-                text: presentedProcessingLabel,
-                style: recordingVisualStyle,
-                theme: effectiveTheme,
-                audioEnergy: 0.25
-            )
-            .lineLimit(1)
-            .truncationMode(.tail)
-        }
-        .padding(.horizontal, 14)
-    }
-
     private var doneContent: some View {
         Group {
             if presentedActivityKind == .revise && presentedShowsReviseUndo {
@@ -1580,7 +1548,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @ViewBuilder
     private var capsuleBorder: some View {
         switch presentedPhase {
-        case .preparing, .recording, .finishing, .processing, .recovering:
+        case .preparing, .recording, .finishing, .processing:
             if usesNativeLiquidGlass(reduceTransparency: reduceTransparency) {
                 // Native glass draws its own boundary (plus the enhanced soft
                 // rim in `capsuleBar`); an opaque stroke here reads as a hard outline.
@@ -1660,10 +1628,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
             pressedAction = nil
             cancelDragOffset = .zero
         case .processing:
-            dismissModeHint()
-            processingStartDate = Date()
-            doneStartDate = nil
-        case .recovering:
             dismissModeHint()
             processingStartDate = Date()
             doneStartDate = nil

@@ -331,7 +331,7 @@ final class TypoCaretStage {
 
     private var exitAfterMessage: TypoPerformance.Exit {
         switch performance.stage {
-        case .reacting(.done): return .success
+        case .reacting(.done), .reacting(.sheepish): return .success
         case .reacting(.failed): return .failed
         default: return .cancelled
         }
@@ -400,6 +400,7 @@ final class TypoCaretStage {
             // Keep listening for caret moves in the air too: the paste can land in steps.
             if !isExiting || isLeaping { followCaretIfDue(at: now) }
         }
+        performance.network = state.networkState
         performance.heard(state.transcriptionText, at: now)
         let attachments = DictationAttachments.shared
         performance.carrying(attachments.carried(at: now), at: now)
@@ -430,10 +431,10 @@ final class TypoCaretStage {
         switch state.barPhase {
         case .preparing, .recording:
             performance.begin(at: now)
-        case .finishing, .processing, .recovering:
+        case .finishing, .processing:
             performance.think(at: now)
         case .done:
-            performance.react(TypoDirector.reaction(for: state.feedbackKind), at: now)
+            performance.react(TypoDirector.reaction(for: state.feedbackKind, network: state.networkState), at: now)
         case .error:
             performance.react(.failed, at: now)
         case .hidden:

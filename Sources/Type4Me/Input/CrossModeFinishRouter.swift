@@ -3,7 +3,6 @@ import Foundation
 enum CrossModeFinishDecision: Equatable {
     case cancel
     case finish(processingMode: ProcessingMode, allowsModeSwitch: Bool)
-    case recover
     case ignore
 }
 
@@ -15,9 +14,6 @@ enum CrossModeFinishRouter {
         resolvedMode: ProcessingMode?,
         allowsModeSwitch: Bool
     ) -> CrossModeFinishDecision {
-        if phase == .recovering {
-            return .recover
-        }
         if phase == .preparing {
             return .cancel
         }

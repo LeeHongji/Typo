@@ -156,12 +156,13 @@ final class HistorySnippetProvenanceTests: XCTestCase {
         let expected = previousColumns + [
             "post_snippet_text", "applied_snippets",
             "processing_mode_id", "target_bundle_id", "target_app_name", "attachment_count",
+            "attachments_json",
         ]
         XCTAssertEqual(columnNames(at: freshPath), expected)
         XCTAssertEqual(columnNames(at: migratedPath), expected, "migration must append in the same order as a fresh schema")
     }
 
-    func testOnlyTheNumberOfAttachmentsIsKept() async {
+    func testQuotesAreKeptApartFromTheWords() async {
         let store = HistoryStore(path: databasePath())
         await store.insert(HistoryRecord(
             id: "with-attachments", createdAt: Date(timeIntervalSince1970: 1_700_000_000), durationSeconds: 1,

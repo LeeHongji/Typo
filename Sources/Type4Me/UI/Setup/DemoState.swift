@@ -204,6 +204,8 @@ final class DemoState {
 // MARK: - FloatingBarState Conformance
 
 extension DemoState: FloatingBarState {
+    var networkState: RecordingNetworkState { .normal }
+
     var pinsTranscriptPopup: Bool { false }
     var isQwen3OnlyMode: Bool { false }
     var isNonRealtimeASR: Bool { false }

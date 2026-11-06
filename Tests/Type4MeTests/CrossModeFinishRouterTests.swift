@@ -36,17 +36,6 @@ final class CrossModeFinishRouterTests: XCTestCase {
         XCTAssertEqual(decision, CrossModeFinishDecision.finish(processingMode: targetMode, allowsModeSwitch: true))
     }
 
-    func testRecoveringPhaseReturnsRecover() {
-        let decision = CrossModeFinishRouter.decide(
-            phase: .recovering,
-            startingMode: .direct,
-            newMode: .translation(),
-            resolvedMode: nil,
-            allowsModeSwitch: true
-        )
-        XCTAssertEqual(decision, CrossModeFinishDecision.recover)
-    }
-
     func testOtherPhaseIgnored() {
         let decision = CrossModeFinishRouter.decide(
             phase: .hidden,

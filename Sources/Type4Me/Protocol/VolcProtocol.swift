@@ -6,6 +6,10 @@ import Compression
 struct VolcUtterance: Sendable, Equatable {
     let text: String
     let definite: Bool
+    /// When the utterance ends in the audio, in seconds, and the same for
+    /// its words when the server sends them.
+    var end: TimeInterval? = nil
+    var words: [TimedWord] = []
 }
 
 struct VolcASRResult: Sendable, Equatable {
@@ -21,6 +25,13 @@ struct VolcServerResponse: Sendable, Equatable {
 // MARK: - Protocol Functions
 
 enum VolcProtocol: Sendable {
+    /// A time field in milliseconds, sent as a number (or a numeric string).
+    static func milliseconds(_ value: Any?) -> TimeInterval? {
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let s = value as? String { return TimeInterval(s) }
+        return nil
+    }
+
 
     // MARK: - Auth Headers
 
@@ -351,9 +362,15 @@ enum VolcProtocol: Sendable {
             ?? json["utterances"] as? [[String: Any]]
         if let utts = uttsSource {
             utterances = utts.map { u in
-                VolcUtterance(
+                let words = (u["words"] as? [[String: Any]] ?? []).compactMap { w -> TimedWord? in
+                    guard let text = w["text"] as? String, !text.isEmpty, let end = Self.milliseconds(w["end_time"]) else { return nil }
+                    return TimedWord(text: text, end: end / 1000)
+                }
+                return VolcUtterance(
                     text: u["text"] as? String ?? "",
-                    definite: u["definite"] as? Bool ?? false
+                    definite: u["definite"] as? Bool ?? false,
+                    end: Self.milliseconds(u["end_time"]).map { $0 / 1000 },
+                    words: words
                 )
             }
         }

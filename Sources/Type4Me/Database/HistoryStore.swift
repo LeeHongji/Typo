@@ -11,6 +11,8 @@ actor HistoryStore {
     static let shared = HistoryStore()
 
     var db: OpaquePointer?
+    /// Screenshots and recordings of entries, in a folder beside the database.
+    nonisolated let media: HistoryMediaStore
 
     init(path: String? = nil) {
         let dbPath: String
@@ -21,6 +23,10 @@ actor HistoryStore {
             try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
             dbPath = appSupport.appendingPathComponent("history.db").path
         }
+        media = HistoryMediaStore(
+            root: URL(fileURLWithPath: dbPath).deletingLastPathComponent()
+                .appendingPathComponent("history-media", isDirectory: true)
+        )
 
         if sqlite3_open(dbPath, &db) == SQLITE_OK {
             let fkStatus = sqlite3_exec(db, "PRAGMA foreign_keys = ON;", nil, nil, nil)
@@ -58,7 +64,8 @@ actor HistoryStore {
                 processing_mode_id TEXT,
                 target_bundle_id TEXT,
                 target_app_name TEXT,
-                attachment_count INTEGER
+                attachment_count INTEGER,
+                attachments_json TEXT
             );
             """
             sqlite3_exec(db, sql, nil, nil, nil)
@@ -183,6 +190,8 @@ actor HistoryStore {
             sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN target_app_name TEXT;", nil, nil, nil)
             // Count of quotes and screenshots delivered with the words, appended last.
             sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN attachment_count INTEGER;", nil, nil, nil)
+            // The quotes, screenshot files and unfinished recording behind that count.
+            sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN attachments_json TEXT;", nil, nil, nil)
 
             // Index for ORDER BY created_at DESC pagination
             sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_history_created_at ON recognition_history(created_at DESC);", nil, nil, nil)
@@ -261,8 +270,8 @@ actor HistoryStore {
     func insert(_ record: HistoryRecord) {
         let sql = """
         INSERT OR REPLACE INTO recognition_history
-        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model, intelli_sense_trace, llm_provider, llm_model, asr_duration_seconds, llm_duration_seconds, user_edited_text, user_edit_status, user_edit_observed_at, user_edit_version, post_snippet_text, applied_snippets, processing_mode_id, target_bundle_id, target_app_name, attachment_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model, intelli_sense_trace, llm_provider, llm_model, asr_duration_seconds, llm_duration_seconds, user_edited_text, user_edit_status, user_edit_observed_at, user_edit_version, post_snippet_text, applied_snippets, processing_mode_id, target_bundle_id, target_app_name, attachment_count, attachments_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -307,6 +316,7 @@ actor HistoryStore {
         } else {
             sqlite3_bind_null(stmt, 26)
         }
+        bindOptional(stmt, 27, record.attachmentsJSON)
         if sqlite3_step(stmt) == SQLITE_DONE {
             postDidChangeNotification()
         }
@@ -431,7 +441,8 @@ actor HistoryStore {
                 processingModeId: optionalColumn(stmt, 22),
                 targetBundleId: optionalColumn(stmt, 23),
                 targetAppName: optionalColumn(stmt, 24),
-                attachmentCount: sqlite3_column_count(stmt) > 25 ? optionalIntColumn(stmt, 25) : nil
+                attachmentCount: sqlite3_column_count(stmt) > 25 ? optionalIntColumn(stmt, 25) : nil,
+                attachmentsJSON: sqlite3_column_count(stmt) > 26 ? optionalColumn(stmt, 26) : nil
             ))
         }
         return records
@@ -504,6 +515,7 @@ actor HistoryStore {
         defer { sqlite3_finalize(stmt) }
         bind(stmt, 1, id)
         if sqlite3_step(stmt) == SQLITE_DONE {
+            media.remove(id: id)
             postDidChangeNotification()
         }
     }
@@ -534,6 +546,7 @@ actor HistoryStore {
         }
         if ok {
             if sqlite3_exec(db, "COMMIT", nil, nil, nil) == SQLITE_OK {
+                ids.forEach(media.remove(id:))
                 postDidChangeNotification()
             } else {
                 sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
@@ -545,8 +558,39 @@ actor HistoryStore {
 
     func deleteAll() {
         if sqlite3_exec(db, "DELETE FROM recognition_history;", nil, nil, nil) == SQLITE_OK {
+            media.removeAll()
             postDidChangeNotification()
         }
+    }
+
+    /// Writes the result of recognizing an unfinished entry's recording again:
+    /// the words replace the partial ones and the recording is no longer needed.
+    func updateRecognizedAgain(id: String, text: String, attachments: HistoryAttachments?) {
+        let sql = "UPDATE recognition_history SET raw_text = ?, final_text = ?, character_count = ?, status = ?, attachments_json = ? WHERE id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bind(stmt, 1, text)
+        bind(stmt, 2, text)
+        sqlite3_bind_int(stmt, 3, Int32(text.count))
+        bind(stmt, 4, "recognized_again")
+        bindOptional(stmt, 5, attachments?.json)
+        bind(stmt, 6, id)
+        if sqlite3_step(stmt) == SQLITE_DONE {
+            media.remove(file: HistoryMediaStore.recordingFile, id: id)
+            postDidChangeNotification()
+        }
+    }
+
+    /// Removes expired recordings, keeps media under its size limit, and drops
+    /// folders whose entries are gone.
+    func pruneMedia() {
+        var ids = Set<String>()
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT id FROM recognition_history WHERE attachments_json IS NOT NULL;", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW { ids.insert(column(stmt, 0)) }
+        media.prune(knownIDs: ids)
     }
 
     func fetchQualityScores() -> [String: Int] {
@@ -689,6 +733,8 @@ actor HistoryStore {
     static let activeStatuses: [String] = [
         "completed",
         "stream_recovered",
+        "stream_partial",
+        "recognized_again",
         "llm_error",
         "translation_error",
         "action_success",
@@ -697,7 +743,7 @@ actor HistoryStore {
     ]
 
     static let activeStatusSQLCondition: String =
-        "status IN ('completed', 'stream_recovered', 'llm_error', 'translation_error', 'action_success', 'action_failed', 'action_unmatched')"
+        "status IN ('completed', 'stream_recovered', 'stream_partial', 'recognized_again', 'llm_error', 'translation_error', 'action_success', 'action_failed', 'action_unmatched')"
 
     struct Statistics: Sendable {
         let totalDuration: Double

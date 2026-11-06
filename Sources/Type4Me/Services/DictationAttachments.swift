@@ -20,8 +20,8 @@ struct DictationAttachment: Identifiable, Equatable {
     /// When its card reaches Typo; until then it is still in the air.
     let arrivesAt: TimeInterval
     var thumbnail: NSImage?
-    /// For a quote: what had been heard when it was selected, and how many
-    /// seconds into the recording, so it goes in at that point of the words.
+    /// For a quote: the words the user had said when the selecting began, and
+    /// how many seconds into the recording that was, so it goes in right there.
     var spokenPrefix = ""
     var spokenAt: TimeInterval = 0
 
@@ -31,10 +31,62 @@ struct DictationAttachment: Identifiable, Equatable {
 /// A quote and where in the talk it was brought in.
 struct PlacedQuote: Equatable, Sendable {
     let text: String
-    /// What had been heard when the text was selected.
+    /// The words said before it.
     var spokenPrefix: String = ""
     /// How far into the recording it was selected, 0…1, for when nothing was heard yet.
     var spokenFraction: Double? = nil
+    /// Seconds into the recording when the selecting began.
+    var audioTime: TimeInterval? = nil
+}
+
+/// Markers that carry quotes' places through a mode that rewrites the words:
+/// ⟦Q1⟧ goes into the text the model sees, and where it comes back is where
+/// the quote goes. A marker that comes back missing or twice gives no place,
+/// and the quote is placed by matching the words instead.
+enum QuoteMarkers {
+    static func token(_ index: Int) -> String { "⟦Q\(index + 1)⟧" }
+
+    static let instruction = """
+
+
+    The text contains markers like ⟦Q1⟧ where quoted material will be inserted. \
+    Keep every marker exactly once and unchanged, at the matching place in your output. Do not add markers.
+    """
+
+    /// The words with each quote's marker where it goes.
+    static func mark(_ text: String, quotes: [PlacedQuote]) -> String {
+        var places: [(index: Int, offset: Int)] = []
+        for (index, quote) in quotes.enumerated() {
+            let at = DictationDelivery.insertionIndex(for: quote, in: text)
+            places.append((index, text.distance(from: text.startIndex, to: at)))
+        }
+        // From the end, so earlier offsets stay valid; the same place keeps the order.
+        places.sort { a, b in a.offset == b.offset ? a.index > b.index : a.offset > b.offset }
+        var marked = text
+        for place in places {
+            marked.insert(contentsOf: token(place.index), at: marked.index(marked.startIndex, offsetBy: place.offset))
+        }
+        return marked
+    }
+
+    /// The model's words without markers, and for each quote the words before
+    /// its marker, or nil when any marker did not come back exactly once.
+    static func extract(_ text: String, count: Int) -> (text: String, prefixes: [String]?) {
+        let stripped = strip(text)
+        guard count > 0 else { return (stripped, nil) }
+        var prefixes: [String] = []
+        for index in 0..<count {
+            let token = token(index)
+            let ranges = text.ranges(of: token)
+            guard ranges.count == 1, let range = ranges.first else { return (stripped, nil) }
+            prefixes.append(strip(String(text[..<range.lowerBound])))
+        }
+        return (stripped, prefixes)
+    }
+
+    static func strip(_ text: String) -> String {
+        text.replacingOccurrences(of: "⟦Q[0-9]+⟧", with: "", options: .regularExpression)
+    }
 }
 
 /// What delivery pastes, decided once the words are final.
@@ -91,6 +143,14 @@ struct DictationDelivery: Equatable, Sendable {
             }
         }
         return out
+    }
+
+    /// Each quote and how many characters into the words it goes, in order.
+    static func placements(speech: String, quotes: [PlacedQuote]) -> [(text: String, offset: Int)] {
+        quotes
+            .map { ($0.text, speech.distance(from: speech.startIndex, to: insertionIndex(for: $0, in: speech))) }
+            .sorted { $0.1 < $1.1 }
+            .map { (text: $0.0, offset: $0.1) }
     }
 
     enum Piece: Equatable {
@@ -244,6 +304,10 @@ final class DictationAttachments {
     enum Notice: Equatable {
         case needsScreenRecording
         case screenshotFailed
+        /// The live stream broke; recording carries on.
+        case connectionLost(String)
+        /// ⌥S was pressed on the window being dictated into.
+        case switchWindowFirst
     }
 
     /// The card's flight from where it was captured to the bar.
@@ -260,13 +324,17 @@ final class DictationAttachments {
     /// Called with each capture so the screen effects can play.
     @ObservationIgnored var onCapture: ((DictationAttachment) -> Void)?
 
-    /// A window is ready to be shot with a click (the pointer shows its dot).
-    private(set) var hasArmedWindow = false
+    /// The user is in another window, where ⌥S would shoot; the tray shows the shortcuts.
+    private(set) var isAwayFromTarget = false
     /// The bar shows the words as they come, so quotes appear inside them;
     /// otherwise they are chips in the tray.
     var quotesShowInline = true
-    /// The words heard so far, read when a quote is taken.
-    @ObservationIgnored var transcriptProvider: (() -> String)?
+    /// Recognition lags the voice: without word timing, the words a quote
+    /// follows are the ones shown this long after the selecting began.
+    static let recognitionLag: TimeInterval = 0.7
+    /// The live words as they came in, with when, to place quotes by time.
+    @ObservationIgnored private var heard: [(at: TimeInterval, text: String)] = []
+    @ObservationIgnored private var heardTimedWords: [TimedWord] = []
 
     @ObservationIgnored private var collector: DictationPointerCollector?
     @ObservationIgnored private var sessionID = UUID()
@@ -278,6 +346,48 @@ final class DictationAttachments {
         items.filter { item in
             if case .quote = item.kind { return !quotesShowInline }
             return true
+        }
+    }
+
+    /// Each live transcript update: remembered, and quotes re-placed as the
+    /// words they follow firm up.
+    func recordTranscript(_ text: String, timedWords: [TimedWord]) {
+        guard isCollecting else { return }
+        let now = CACurrentMediaTime()
+        heard.append((now, text))
+        if heard.count > 600 { heard.removeFirst(heard.count - 600) }
+        heardTimedWords = timedWords
+        for index in items.indices {
+            guard case .quote = items[index].kind else { continue }
+            let prefix = Self.spokenPrefix(
+                selectionStart: startedAt + items[index].spokenAt, recordingStart: startedAt,
+                timedWords: heardTimedWords, heard: heard
+            )
+            if prefix != items[index].spokenPrefix { items[index].spokenPrefix = prefix }
+        }
+    }
+
+    /// Pure: the words said before a selection began. By the recognizer's word
+    /// times when it gives them; otherwise the words shown `recognitionLag`
+    /// after it began, since that is how long the words take to appear.
+    nonisolated static func spokenPrefix(
+        selectionStart: TimeInterval,
+        recordingStart: TimeInterval,
+        timedWords: [TimedWord],
+        heard: [(at: TimeInterval, text: String)]
+    ) -> String {
+        if let byTime = TimedWord.prefix(timedWords, through: selectionStart - recordingStart) {
+            return byTime
+        }
+        let shownBy = selectionStart + recognitionLag
+        return heard.last { $0.at <= shownBy }?.text ?? ""
+    }
+
+    /// Quotes not yet delivered, placed as they stand, for a rewriting mode to carry.
+    func pendingQuotes() -> [PlacedQuote] {
+        items.compactMap { item in
+            guard case .quote(let text) = item.kind else { return nil }
+            return PlacedQuote(text: text, spokenPrefix: item.spokenPrefix, audioTime: item.spokenAt)
         }
     }
 
@@ -306,13 +416,20 @@ final class DictationAttachments {
         isCollecting = true
         startedAt = CACurrentMediaTime()
         stoppedAt = nil
+        heard = []
+        heardTimedWords = []
         Self.removeStaleFiles()
         let collector = DictationPointerCollector(
             ownPID: ProcessInfo.processInfo.processIdentifier,
             targetPID: targetPID,
             targetWindowID: targetWindowID,
             deliver: { [weak self] capture in self?.take(capture) },
-            armedChanged: { [weak self] armed in self?.hasArmedWindow = armed }
+            awayChanged: { [weak self] away in
+                guard let self else { return }
+                self.isAwayFromTarget = away
+                // The hint to switch windows has done its job.
+                if away, self.notice == .switchWindowFirst { self.notice = nil }
+            }
         )
         DebugFileLogger.log("attachments: collecting target=\(targetPID.map(String.init) ?? "-") window=\(targetWindowID.map(String.init) ?? "-")")
         collector.start()
@@ -323,7 +440,7 @@ final class DictationAttachments {
     func stopCollecting() {
         if isCollecting { stoppedAt = CACurrentMediaTime() }
         isCollecting = false
-        hasArmedWindow = false
+        isAwayFromTarget = false
         collector?.stop()
         collector = nil
     }
@@ -343,7 +460,8 @@ final class DictationAttachments {
             switch item.kind {
             case .quote(let text):
                 delivery.quotes.append(PlacedQuote(
-                    text: text, spokenPrefix: item.spokenPrefix, spokenFraction: item.spokenAt / duration
+                    text: text, spokenPrefix: item.spokenPrefix, spokenFraction: item.spokenAt / duration,
+                    audioTime: item.spokenAt
                 ))
             case .screenshot(let url): delivery.screenshots.append(url)
             }
@@ -377,24 +495,46 @@ final class DictationAttachments {
 
     func dismissNotice() { notice = nil }
 
+    func showNotice(_ notice: Notice) { self.notice = notice }
+
     // MARK: - Captures
 
     private func take(_ capture: DictationPointerCollector.Capture) {
         guard isCollecting else { return }
         let now = CACurrentMediaTime()
         switch capture {
-        case .quote(let text, let rect):
+        case .quote(let text, let rect, let selectionStart):
             let quote = Self.trimmedQuote(text)
             guard !quote.isEmpty, !items.contains(where: { $0.kind == .quote(quote) }) else { return }
             var item = DictationAttachment(kind: .quote(quote), source: rect, arrivesAt: now + Self.flightDuration)
-            item.spokenPrefix = transcriptProvider?() ?? ""
-            item.spokenAt = now - startedAt
+            let start = min(max(selectionStart, startedAt), now)
+            item.spokenAt = start - startedAt
+            item.spokenPrefix = Self.spokenPrefix(
+                selectionStart: start, recordingStart: startedAt, timedWords: heardTimedWords, heard: heard
+            )
             add(item)
+            // Without word timing, the words it follows are still on their way.
+            let settle = start + Self.recognitionLag - now
+            if heardTimedWords.isEmpty, settle > 0 {
+                let id = item.id
+                Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(Int(settle * 1000) + 20))
+                    self?.resettle(id)
+                }
+            }
         case .window(let id, let frame):
             shoot(frame: frame) { await Self.screenshot(windowID: id) }
         case .region(let rect):
             shoot(frame: rect) { await Self.screenshot(region: rect) }
         }
+    }
+
+    private func resettle(_ id: DictationAttachment.ID) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].spokenPrefix = Self.spokenPrefix(
+            selectionStart: startedAt + items[index].spokenAt, recordingStart: startedAt,
+            timedWords: heardTimedWords, heard: heard
+        )
     }
 
     private func shoot(frame: CGRect, _ capture: @escaping @MainActor () async -> Result<Shot, ShotFailure>) {
@@ -550,40 +690,15 @@ private extension DictationAttachment.Kind {
     }
 }
 
-/// Which window a click would shoot. The window that comes to the front is
-/// armed only once it has stayed there a moment, so the click that brings it
-/// forward (or opens it from the menu bar) never shoots it. Once shot it rests
-/// until the user goes to another window and comes back.
-struct DictationArming: Equatable {
-    static let settle: TimeInterval = 0.3
-
-    private(set) var candidate: CGWindowID?
-    private var since: TimeInterval = 0
-    private var spent: CGWindowID?
-
-    /// `front`: the frontmost app's front window when it may be shot (not
-    /// Type4Me's, not the window being dictated into), else nil.
-    mutating func update(front: CGWindowID?, at now: TimeInterval) -> CGWindowID? {
-        if front != candidate {
-            if candidate == spent { spent = nil }
-            candidate = front
-            since = now
-        }
-        guard let candidate, candidate != spent, now - since >= Self.settle else { return nil }
-        return candidate
-    }
-
-    mutating func shot(_ id: CGWindowID) { spent = id }
-}
-
-/// Watches the mouse in other apps while the user talks. A drag (or a double
-/// or triple click) selects text to quote. A window that is ready shows a dot
-/// beside the pointer and an outline, and one click shoots it. ⌥S draws a box
-/// to shoot. Type4Me's own windows never reach a global monitor.
+/// Watches the user's hands while they talk. Selecting text anywhere (a drag,
+/// a double or triple click) quotes it; ⌥S shoots the window in front, ⌥⇧S
+/// draws a box to shoot. Clicks are only watched, never taken, so nothing is
+/// shot by accident. Type4Me's own windows never reach a global monitor.
 @MainActor
 final class DictationPointerCollector {
     enum Capture {
-        case quote(String, CGRect)
+        /// The selected text, where it is on screen, and when the selecting began.
+        case quote(String, CGRect, startedAt: TimeInterval)
         case window(CGWindowID, CGRect)
         case region(CGRect)
     }
@@ -609,23 +724,28 @@ final class DictationPointerCollector {
         return .none
     }
 
+    /// Pure: what ⌥S may shoot — the front app's front window, unless that is
+    /// Type4Me or the window being dictated into.
+    nonisolated static func shootable(
+        front: (pid: pid_t, window: CGWindowID)?, ownPID: pid_t, targetPID: pid_t?, targetWindowID: CGWindowID?
+    ) -> Bool {
+        guard let front, front.pid != ownPID else { return false }
+        return !(front.pid == targetPID && front.window == targetWindowID)
+    }
+
     private let ownPID: pid_t
     private let targetPID: pid_t?
     private let targetWindowID: CGWindowID?
     private let deliver: (Capture) -> Void
-    private let armedChanged: (Bool) -> Void
+    private let awayChanged: (Bool) -> Void
     private var monitors: [Any] = []
     private var downPoint: CGPoint?
     private var downWindow: WindowHit?
+    private var gestureStartedAt: TimeInterval = 0
 
-    private var tap: DictationPointerTap?
+    private var tap: DictationShortcutTap?
     private var timer: Timer?
-    private var tick = 0
-    private var arming = DictationArming()
-    private var armed: WindowHit?
-    private var pointerOnArmed = false
-    private let dot = PointerDot()
-    private let outline = WindowOutline()
+    private var isAway = false
     private var region: RegionCaptureOverlay?
 
     struct WindowHit: Equatable {
@@ -636,20 +756,21 @@ final class DictationPointerCollector {
 
     init(
         ownPID: pid_t, targetPID: pid_t?, targetWindowID: CGWindowID?,
-        deliver: @escaping (Capture) -> Void, armedChanged: @escaping (Bool) -> Void = { _ in }
+        deliver: @escaping (Capture) -> Void, awayChanged: @escaping (Bool) -> Void = { _ in }
     ) {
         self.ownPID = ownPID
         self.targetPID = targetPID
         self.targetWindowID = targetWindowID
         self.deliver = deliver
-        self.armedChanged = armedChanged
+        self.awayChanged = awayChanged
     }
 
     func start() {
         guard monitors.isEmpty else { return }
         if let down = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] event in
             let point = event.locationInWindow
-            MainActor.assumeIsolated { self?.mouseDown(at: point) }
+            let clicks = event.clickCount
+            MainActor.assumeIsolated { self?.mouseDown(at: point, clickCount: clicks) }
         }) { monitors.append(down) }
         if let up = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp, handler: { [weak self] event in
             let clicks = event.clickCount
@@ -657,25 +778,26 @@ final class DictationPointerCollector {
             MainActor.assumeIsolated { self?.mouseUp(at: point, clickCount: clicks) }
         }) { monitors.append(up) }
 
-        let tap = DictationPointerTap(
-            onShoot: { [weak self] armed in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.shoot(armed) } }
-            },
-            onRegionKey: { [weak self] in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.captureRegion() } }
-            },
-            onEscape: { [weak self] in
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.region?.cancel() } }
+        let tap = DictationShortcutTap { [weak self] shortcut in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    switch shortcut {
+                    case .window: self?.shootFrontWindow()
+                    case .region: self?.captureRegion()
+                    case .cancelRegion: self?.region?.cancel()
+                    }
+                }
             }
-        )
+        }
         if tap.start() { self.tap = tap }
 
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.step() }
+        // Whether the user is in another window, for the tray's shortcut hint.
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkAway() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        step()
+        checkAway()
     }
 
     func stop() {
@@ -688,72 +810,43 @@ final class DictationPointerCollector {
         region?.cancel()
         region = nil
         DictationRegionCaptureState.isActive = false
-        setArmed(nil)
-        dot.hide()
-        outline.hide()
+        setAway(false)
     }
 
-    // MARK: - Arming
+    // MARK: - Window shots
 
-    /// Every frame: the dot follows the pointer. Ten times a second: which
-    /// window is armed and whether the pointer is on it.
-    private func step() {
-        tick += 1
-        if tick % 6 == 1 { rearm() }
-        let showsDot = pointerOnArmed && region == nil
-        if showsDot { dot.show(at: NSEvent.mouseLocation) } else { dot.hide() }
-        if showsDot, let armed { outline.show(armed.frame) } else { outline.hide() }
-    }
-
-    private func rearm() {
-        let front = frontCandidate()
-        let id = arming.update(front: front?.id, at: CACurrentMediaTime())
-        setArmed(id.flatMap { id in front?.id == id ? front : nil })
-        if let armed {
-            let mouse = NSEvent.mouseLocation
-            pointerOnArmed = armed.frame.contains(mouse)
-                && !ownFrames().contains(where: { $0.contains(mouse) })
-                && DictationPointerTap.topWindow(at: Self.windowServerPoint(mouse), excluding: ownPID) == armed.id
-        } else {
-            pointerOnArmed = false
-        }
-        tap?.update(
-            armed: armed.map { DictationPointerTap.Armed(id: $0.id, frame: Self.windowServerRect($0.frame)) },
-            ownFrames: ownFrames().map(Self.windowServerRect),
-            regionActive: region != nil
-        )
-    }
-
-    private func setArmed(_ hit: WindowHit?) {
-        let was = armed != nil
-        armed = hit
-        if was != (hit != nil) { armedChanged(hit != nil) }
-    }
-
-    /// The frontmost app's front window, when a click may shoot it.
-    private func frontCandidate() -> WindowHit? {
+    private func frontWindow() -> WindowHit? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let pid = app.processIdentifier
-        guard pid != ownPID else { return nil }
-        guard let hit = Self.frontWindow(of: pid) else { return nil }
-        if pid == targetPID, hit.id == targetWindowID { return nil }
-        return hit
+        return Self.frontWindow(of: app.processIdentifier)
     }
 
-    /// Type4Me's own windows that take clicks, in AppKit coordinates.
-    private func ownFrames() -> [CGRect] {
-        NSApp.windows.filter { $0.isVisible && !$0.ignoresMouseEvents && $0.alphaValue > 0.01 }.map(\.frame)
+    private func checkAway() {
+        let front = frontWindow()
+        setAway(Self.shootable(
+            front: front.map { ($0.owner, $0.id) }, ownPID: ownPID, targetPID: targetPID, targetWindowID: targetWindowID
+        ))
     }
 
-    private func shoot(_ armed: DictationPointerTap.Armed) {
-        guard self.armed?.id == armed.id else { return }
-        arming.shot(armed.id)
-        let frame = Self.appKitRect(armed.frame)
-        dot.pulse()
-        AttachmentEffects.flash(frame)
-        DebugFileLogger.log("attachments: shutter window=\(armed.id)")
-        deliver(.window(armed.id, frame))
-        rearm()
+    private func setAway(_ away: Bool) {
+        guard away != isAway else { return }
+        isAway = away
+        awayChanged(away)
+    }
+
+    /// ⌥S: the window in front, now.
+    func shootFrontWindow() {
+        guard region == nil else { return }
+        let front = frontWindow()
+        guard let front, Self.shootable(
+            front: (front.owner, front.id), ownPID: ownPID, targetPID: targetPID, targetWindowID: targetWindowID
+        ) else {
+            DebugFileLogger.log("attachments: ⌥S on the dictation window, nothing shot")
+            DictationAttachments.shared.showNotice(.switchWindowFirst)
+            return
+        }
+        AttachmentEffects.flash(front.frame)
+        DebugFileLogger.log("attachments: shortcut window=\(front.id)")
+        deliver(.window(front.id, front.frame))
     }
 
     // MARK: - Box capture
@@ -764,22 +857,24 @@ final class DictationPointerCollector {
             guard let self else { return }
             self.region = nil
             DictationRegionCaptureState.isActive = false
+            self.tap?.setRegionActive(false)
             if let rect {
                 AttachmentEffects.flash(rect)
                 DebugFileLogger.log("attachments: region \(Int(rect.width))x\(Int(rect.height))")
                 self.deliver(.region(rect))
             }
-            self.rearm()
         }
         region = overlay
         DictationRegionCaptureState.isActive = true
-        rearm()
+        tap?.setRegionActive(true)
         overlay.show()
     }
 
     // MARK: - Quotes
 
-    private func mouseDown(at point: CGPoint) {
+    private func mouseDown(at point: CGPoint, clickCount: Int) {
+        // A double or triple click began with its first press.
+        if clickCount <= 1 { gestureStartedAt = CACurrentMediaTime() }
         downPoint = point
         downWindow = Self.window(at: point, excluding: ownPID)
     }
@@ -796,6 +891,7 @@ final class DictationPointerCollector {
             x: min(down.x, up.x), y: min(down.y, up.y) - 8,
             width: max(abs(up.x - down.x), 16), height: abs(up.y - down.y) + 20
         )
+        let startedAt = gestureStartedAt
         Task { [weak self] in
             // Let the app finish updating its selection.
             try? await Task.sleep(for: .milliseconds(140))
@@ -812,7 +908,7 @@ final class DictationPointerCollector {
                 text = await PromptContext.readSelectedTextByTemporaryCopy(timeoutMs: 250)
             }
             guard !text.isEmpty else { return }
-            self.deliver(.quote(text, read?.bounds ?? dragBox))
+            self.deliver(.quote(text, read?.bounds ?? dragBox, startedAt: startedAt))
         }
     }
 

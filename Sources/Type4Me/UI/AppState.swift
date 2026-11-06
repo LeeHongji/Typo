@@ -4,13 +4,21 @@ import Type4MeReviseCore
 
 // MARK: - Floating Bar Phase
 
+/// How the network has behaved during one dictation.
+enum RecordingNetworkState: Equatable, Sendable {
+    case normal
+    /// The live stream broke while recording; recording went on.
+    case lost
+    /// The whole recording is being recognized again.
+    case retrying
+}
+
 enum FloatingBarPhase: Equatable {
     case hidden
     case preparing
     case recording
     case finishing
     case processing
-    case recovering
     case done
     case error
 }
@@ -1439,6 +1447,25 @@ final class AppState {
             // once the bar is gone, whatever was not delivered is dropped.
             if oldValue == .recording { DictationAttachments.shared.stopCollecting() }
             if barPhase == .hidden { DictationAttachments.shared.end() }
+            watchProcessingTime()
+        }
+    }
+
+    /// Once the words have been on their way for a while, the bar says the
+    /// network is slow (and Typo starts waiting patiently).
+    private func watchProcessingTime() {
+        slowProcessingTask?.cancel()
+        slowProcessingTask = nil
+        guard barPhase == .finishing || barPhase == .processing else {
+            processingIsSlow = false
+            return
+        }
+        guard !processingIsSlow else { return }
+        slowProcessingTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.slowProcessingAfter)
+            guard let self, !Task.isCancelled,
+                  self.barPhase == .finishing || self.barPhase == .processing else { return }
+            self.processingIsSlow = true
         }
     }
     /// Whether this recording brings in quotes and screenshots (dictation only).
@@ -1491,8 +1518,22 @@ final class AppState {
     var usesFinishingLabel: Bool = false
     var finishingLabel: FinishingLabel = .recognizing
     var effectiveProcessingLabel: String {
-        processingLabelOverride ?? (usesFinishingLabel ? finishingLabel.localized : currentMode.processingLabel)
+        if networkState == .retrying {
+            return L("正在用整段录音重新识别…", "Recognizing the whole recording again…")
+        }
+        if processingIsSlow, processingLabelOverride == nil {
+            return L("网络有点慢，还在等… Esc 取消", "Network is slow, still waiting… Esc cancels")
+        }
+        return processingLabelOverride ?? (usesFinishingLabel ? finishingLabel.localized : currentMode.processingLabel)
     }
+
+    /// The network as this dictation has met it; the bar's copy and Typo's face follow it.
+    var networkState: RecordingNetworkState = .normal
+    /// The words have taken long enough to come back that the bar says why.
+    var processingIsSlow = false
+    /// After this long in processing, the bar says the network is slow.
+    static let slowProcessingAfter: Duration = .seconds(3)
+    @ObservationIgnored private var slowProcessingTask: Task<Void, Never>?
 
     // MARK: Panel Control (not observed by SwiftUI)
 
@@ -1602,6 +1643,8 @@ final class AppState {
         feedbackKind = .standard
         processingLabelOverride = nil
         pinsTranscriptPopup = false
+        networkState = .normal
+        processingIsSlow = false
         barPhase = .preparing
         recordingFinishHint = nil
         usesFinishingLabel = false
@@ -1627,6 +1670,8 @@ final class AppState {
         feedbackKind = .standard
         processingLabelOverride = nil
         pinsTranscriptPopup = false
+        networkState = .normal
+        processingIsSlow = false
         barPhase = .preparing
         recordingFinishHint = nil
         usesFinishingLabel = false
@@ -1651,7 +1696,6 @@ final class AppState {
         if collectsAttachments,
            let front = NSWorkspace.shared.frontmostApplication,
            front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            DictationAttachments.shared.transcriptProvider = { [weak self] in self?.transcriptionText ?? "" }
             DictationAttachments.shared.begin(
                 targetPID: front.processIdentifier,
                 targetWindowID: DictationDestination.frontWindowID(of: front.processIdentifier)
@@ -1748,6 +1792,8 @@ final class AppState {
             return
         }
 
+        // Quotes taken while talking are placed against the words as they come.
+        defer { DictationAttachments.shared.recordTranscript(transcriptionText, timedWords: transcript.timedWords) }
         if transcript.isFinal,
            !transcript.authoritativeText.isEmpty,
            transcript.authoritativeText != transcript.composedText {
@@ -1785,27 +1831,12 @@ final class AppState {
         segments = [TranscriptionSegment(text: result, isConfirmed: true)]
     }
 
-    func showRecovery(text: String, message: String) {
-        segments = text.isEmpty ? [] : [TranscriptionSegment(text: text, isConfirmed: true)]
-        feedbackKind = .standard
-        processingLabelOverride = message
-        processingFinishTime = nil
-        pinsTranscriptPopup = true
-        audioLevel.current = 0
-        recordingStartDate = nil
-        barPhase = .recovering
-        onShowPanel?()
-    }
-
-    func showRecoveryPrompt(text: String, message: String) {
-        showRecovery(text: text, message: message)
-    }
-
-    func showRecoveryResult(text: String, message: String) {
-        segments = text.isEmpty ? [] : [TranscriptionSegment(text: text, isConfirmed: true)]
-        processingLabelOverride = nil
-        pinsTranscriptPopup = !text.isEmpty
-        showDone(message: message, delay: .seconds(2.5))
+    /// The live stream broke while recording: recording carries on, the tray
+    /// says so, and Typo listens harder.
+    func markConnectionLost(message: String) {
+        guard barPhase == .recording || barPhase == .preparing else { return }
+        networkState = .lost
+        DictationAttachments.shared.showNotice(.connectionLost(message))
     }
 
     func finalize(text: String, outcome: InjectionOutcome, llmFailed: Bool = false) {
@@ -1841,13 +1872,15 @@ final class AppState {
                     "处理失败，已尝试输入，原文已保留至剪贴板",
                     "Processing failed; paste attempted, raw text kept in clipboard"
                 )
+            case .insertedPartial:
+                message = outcome.completionMessage
             }
             showDone(message: message, delay: .seconds(2.0), outcomeForLog: "llmFailed")
         } else if outcome == .inserted {
             dismissAfterOutput()
         } else {
             // Typo looks startled when the words could not go where they were meant to.
-            feedbackKind = outcome == .copiedTargetGone ? .warning : .standard
+            feedbackKind = outcome == .copiedTargetGone || outcome == .insertedPartial ? .warning : .standard
             showDone(message: outcome.completionMessage, delay: outcome.completionHoldDuration, outcomeForLog: "\(outcome)")
         }
         if shouldRevealSuppressedFinalization {

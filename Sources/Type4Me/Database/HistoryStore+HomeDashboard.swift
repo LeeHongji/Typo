@@ -23,7 +23,7 @@ extension HistoryStore {
     /// Statuses whose text reached the user as dictation output. Mac Action
     /// results are command feedback, not dictated text, so they are excluded.
     static let dictationStatusSQLCondition =
-        "status IN ('completed', 'stream_recovered', 'llm_error', 'translation_error')"
+        "status IN ('completed', 'stream_recovered', 'stream_partial', 'recognized_again', 'llm_error', 'translation_error')"
 
     func modeUsageRows(from start: Date, to end: Date) async -> [ModeUsageRow] {
         let sql = """

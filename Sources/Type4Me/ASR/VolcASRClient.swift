@@ -109,7 +109,27 @@ struct VolcTranscriptAccumulator {
         )
     }
 
+    /// Each utterance's words with their end times, or the utterance itself
+    /// when the server sends no word timing.
+    static func timedWords(_ utterances: [VolcUtterance]) -> [TimedWord] {
+        utterances.flatMap { u -> [TimedWord] in
+            if !u.words.isEmpty { return u.words }
+            guard let end = u.end, !u.text.isEmpty else { return [] }
+            return [TimedWord(text: u.text, end: end)]
+        }
+    }
+
     private func makeTranscript(
+        canonicalText: String,
+        utterances: [VolcUtterance],
+        isFinal: Bool
+    ) -> RecognitionTranscript {
+        var transcript = makeText(canonicalText: canonicalText, utterances: utterances, isFinal: isFinal)
+        transcript.timedWords = Self.timedWords(utterances)
+        return transcript
+    }
+
+    private func makeText(
         canonicalText: String,
         utterances: [VolcUtterance],
         isFinal: Bool

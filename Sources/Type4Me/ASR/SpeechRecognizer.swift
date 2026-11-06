@@ -45,6 +45,22 @@ enum ProxyBypassMode: String {
     var bypassLLM: Bool { self == .all || self == .llm }
 }
 
+/// A recognized word (or phrase) and when it ends in the audio, in seconds
+/// from the start of the recording.
+struct TimedWord: Sendable, Equatable {
+    let text: String
+    let end: TimeInterval
+
+    /// A word still being said this soon after a moment belongs before it.
+    static let tolerance: TimeInterval = 0.15
+
+    /// The words said by `time`, joined; nil when the recognizer gives no timing.
+    static func prefix(_ words: [TimedWord], through time: TimeInterval) -> String? {
+        guard !words.isEmpty else { return nil }
+        return words.prefix { $0.end <= time + tolerance }.map(\.text).joined()
+    }
+}
+
 struct RecognitionTranscript: Sendable, Equatable {
     let confirmedSegments: [String]
     let partialText: String
@@ -53,6 +69,9 @@ struct RecognitionTranscript: Sendable, Equatable {
     /// Monotonic timestamp when the ASR client emitted this transcript.
     /// Used for pipeline latency diagnostics; excluded from Equatable.
     var emitTime: ContinuousClock.Instant = .now
+    /// When each word ends in the audio, if the recognizer says; it places
+    /// quotes where the user was talking. Excluded from Equatable.
+    var timedWords: [TimedWord] = []
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.confirmedSegments == rhs.confirmedSegments
@@ -87,6 +106,9 @@ enum InjectionOutcome: Sendable, Equatable {
     /// The user left the place being dictated into and it could not be
     /// brought back, so nothing was pasted; the words are in the clipboard.
     case copiedTargetGone
+    /// The network broke and only the words heard before it went in; the
+    /// recording is kept in history to be recognized again.
+    case insertedPartial
     case notInserted
     case discarded
 
@@ -103,6 +125,11 @@ enum InjectionOutcome: Sendable, Equatable {
             return L("已粘贴到剪贴板", "Copied to clipboard")
         case .copiedTargetGone:
             return L("已复制，原输入框不在了", "Copied — the original box is gone")
+        case .insertedPartial:
+            return L(
+                "网络不好，只识别到一部分，录音已存到历史，可重新识别",
+                "Network was poor — only part was recognized. The recording is in history to try again."
+            )
         case .notInserted:
             return L("未找到可输入的位置", "No editable field found")
         case .discarded:
@@ -116,6 +143,8 @@ enum InjectionOutcome: Sendable, Equatable {
             return .milliseconds(1500)
         case .copiedTargetGone:
             return .milliseconds(2200)
+        case .insertedPartial:
+            return .milliseconds(3200)
         case .discarded, .inserted:
             return .milliseconds(500)
         }
@@ -162,11 +191,10 @@ enum RecognitionEvent: Sendable {
     case completed
     case processingResult(text: String)
     case processingLabelOverride(String)
-    case recoveryStarted(text: String, message: String)
-    case recoveryPrompt(text: String, message: String)
-    case recoverySucceeded(text: String, message: String)
-    case recoveryFailed(text: String, message: String)
-    case recoveryInterrupted(text: String, message: String)
+    /// The live stream broke while recording; recording goes on.
+    case connectionLost(message: String)
+    /// The whole recording is being recognized again after a broken stream.
+    case retryingFullRecording
     case finalized(text: String, injection: InjectionOutcome, llmFailed: Bool)
     /// Mac Action mode: action result to surface in the floating bar with
     /// status-specific icon and color, holding for ~3 seconds.

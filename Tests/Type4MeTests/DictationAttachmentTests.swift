@@ -164,97 +164,35 @@ final class DictationPointerGestureTests: XCTestCase {
     }
 }
 
-final class DictationArmingTests: XCTestCase {
-    func testTheWindowBroughtForwardIsArmedOnlyAfterItStaysAMoment() {
-        var arming = DictationArming()
-        XCTAssertNil(arming.update(front: 7, at: 10), "the click that brought it forward does not shoot it")
-        XCTAssertNil(arming.update(front: 7, at: 10.2))
-        XCTAssertEqual(arming.update(front: 7, at: 10.31), 7)
+final class DictationShortcutTests: XCTestCase {
+    private typealias T = DictationShortcutTap
+
+    func testOptionSShootsTheWindowAndOptionShiftSDrawsABox() {
+        XCTAssertEqual(T.shortcut(keyCode: T.sKey, flags: .maskAlternate, regionActive: false), .window)
+        XCTAssertEqual(T.shortcut(keyCode: T.sKey, flags: [.maskAlternate, .maskShift], regionActive: false), .region)
     }
 
-    func testNoWindowThatMayBeShotArmsNothing() {
-        var arming = DictationArming()
-        XCTAssertNil(arming.update(front: nil, at: 0))
-        XCTAssertNil(arming.update(front: nil, at: 5))
+    func testAHeldDictationKeyDoesNotGetInTheWay() {
+        // Holding right ⌘ to talk, then pressing ⌥S.
+        XCTAssertEqual(T.shortcut(keyCode: T.sKey, flags: [.maskCommand, .maskAlternate], regionActive: false), .window)
+        XCTAssertEqual(T.shortcut(keyCode: T.sKey, flags: [.maskControl, .maskAlternate, .maskShift], regionActive: false), .region)
     }
 
-    func testSwitchingWindowsStartsTheWaitAgain() {
-        var arming = DictationArming()
-        _ = arming.update(front: 7, at: 0)
-        XCTAssertEqual(arming.update(front: 7, at: 1), 7)
-        XCTAssertNil(arming.update(front: 8, at: 1.1))
-        XCTAssertEqual(arming.update(front: 8, at: 1.5), 8)
+    func testOtherKeysAndPlainTypingPassThrough() {
+        XCTAssertNil(T.shortcut(keyCode: T.sKey, flags: [], regionActive: false))
+        XCTAssertNil(T.shortcut(keyCode: 0, flags: .maskAlternate, regionActive: false), "⌥A")
+        XCTAssertNil(T.shortcut(keyCode: T.escapeKey, flags: [], regionActive: false), "Esc stays the recording's")
+        XCTAssertEqual(T.shortcut(keyCode: T.escapeKey, flags: [], regionActive: true), .cancelRegion)
     }
 
-    func testAShotWindowRestsUntilTheUserGoesAwayAndComesBack() {
-        var arming = DictationArming()
-        _ = arming.update(front: 7, at: 0)
-        XCTAssertEqual(arming.update(front: 7, at: 1), 7)
-        arming.shot(7)
-        XCTAssertNil(arming.update(front: 7, at: 2), "clicks there are ordinary now")
-        XCTAssertNil(arming.update(front: 7, at: 9))
-        _ = arming.update(front: 8, at: 10)
-        _ = arming.update(front: 7, at: 11)
-        XCTAssertEqual(arming.update(front: 7, at: 11.4), 7)
-    }
-}
-
-final class DictationShutterTests: XCTestCase {
-    private let p = CGPoint(x: 100, y: 100)
-
-    func testAPlainClickIsTakenForTheShutterAndShotWhenNoSecondClickFollows() {
-        var s = DictationShutter()
-        XCTAssertEqual(s.down(at: p, time: 0, clickState: 1, shootable: true), [.hold])
-        XCTAssertEqual(s.up(at: p, time: 0.1), [.hold, .wait])
-        XCTAssertEqual(s.timeout(), [.shoot])
-        XCTAssertEqual(s.phase, .idle)
-    }
-
-    func testADragGivesThePressBackSoTextCanBeSelected() {
-        var s = DictationShutter()
-        _ = s.down(at: p, time: 0, clickState: 1, shootable: true)
-        XCTAssertEqual(s.drag(to: CGPoint(x: 102, y: 101)), [.drop], "a wobble is not a drag yet")
-        XCTAssertEqual(s.drag(to: CGPoint(x: 110, y: 100)), [.hold, .flush])
-        XCTAssertEqual(s.drag(to: CGPoint(x: 140, y: 100)), [.pass])
-        XCTAssertEqual(s.up(at: CGPoint(x: 140, y: 100), time: 0.4), [.pass])
-        XCTAssertEqual(s.timeout(), [])
-    }
-
-    func testADoubleClickGivesBothClicksBack() {
-        var s = DictationShutter()
-        _ = s.down(at: p, time: 0, clickState: 1, shootable: true)
-        _ = s.up(at: p, time: 0.08)
-        XCTAssertEqual(s.down(at: p, time: 0.2, clickState: 2, shootable: true), [.hold, .flush])
-        XCTAssertEqual(s.up(at: p, time: 0.25), [.pass])
-        XCTAssertEqual(s.down(at: p, time: 0.35, clickState: 3, shootable: true), [.pass], "a triple click goes through")
-        XCTAssertEqual(s.timeout(), [])
-    }
-
-    func testALongPressIsTheUserWorkingInTheWindow() {
-        var s = DictationShutter()
-        _ = s.down(at: p, time: 0, clickState: 1, shootable: true)
-        XCTAssertEqual(s.up(at: p, time: 0.8), [.hold, .flush])
-    }
-
-    func testAClickThatMayNotShootPassesUntouched() {
-        var s = DictationShutter()
-        XCTAssertEqual(s.down(at: p, time: 0, clickState: 1, shootable: false), [.pass])
-        XCTAssertEqual(s.up(at: p, time: 0.1), [.pass])
-        XCTAssertEqual(s.timeout(), [])
-    }
-
-    func testANewClickBeforeTheWaitEndsShootsTheFirstThenIsJudgedAlone() {
-        var s = DictationShutter()
-        _ = s.down(at: p, time: 0, clickState: 1, shootable: true)
-        _ = s.up(at: p, time: 0.05)
-        XCTAssertEqual(s.down(at: CGPoint(x: 600, y: 600), time: 0.2, clickState: 1, shootable: false), [.shoot, .pass])
-    }
-
-    func testStoppingMidClickGivesTheClickBack() {
-        var s = DictationShutter()
-        _ = s.down(at: p, time: 0, clickState: 1, shootable: true)
-        XCTAssertEqual(s.cancel(), [.flush])
-        XCTAssertEqual(s.cancel(), [])
+    func testOnlyAnotherWindowCanBeShot() {
+        typealias C = DictationPointerCollector
+        let own: pid_t = 1
+        XCTAssertTrue(C.shootable(front: (5, 200), ownPID: own, targetPID: 7, targetWindowID: 100))
+        XCTAssertTrue(C.shootable(front: (7, 101), ownPID: own, targetPID: 7, targetWindowID: 100), "another window of the same app")
+        XCTAssertFalse(C.shootable(front: (7, 100), ownPID: own, targetPID: 7, targetWindowID: 100), "the window being dictated into")
+        XCTAssertFalse(C.shootable(front: (own, 300), ownPID: own, targetPID: 7, targetWindowID: 100))
+        XCTAssertFalse(C.shootable(front: nil, ownPID: own, targetPID: 7, targetWindowID: 100))
     }
 }
 
@@ -271,11 +209,13 @@ final class RegionCaptureTests: XCTestCase {
         UserDefaults.standard.set("zh", forKey: key)
         XCTAssertEqual(AttachmentCopy.area, "框选")
         XCTAssertEqual(AttachmentCopy.regionHint, "拖动框选要截的区域 · Esc 取消")
-        XCTAssertEqual(AttachmentCopy.clickHint, "点击窗口截图 · ⌘+点击照常操作")
+        XCTAssertEqual(AttachmentCopy.shortcutHint, "⌥S 截这个窗口")
+        XCTAssertEqual(AttachmentCopy.switchWindowFirst, "先切到要截的窗口")
         UserDefaults.standard.set("en", forKey: key)
         XCTAssertEqual(AttachmentCopy.area, "Area")
         XCTAssertEqual(AttachmentCopy.regionHint, "Drag to capture an area · Esc to cancel")
-        XCTAssertEqual(AttachmentCopy.clickHint, "Click a window to capture · ⌘-click to use it")
+        XCTAssertEqual(AttachmentCopy.shortcutHint, "⌥S this window")
+        XCTAssertEqual(AttachmentCopy.switchWindowFirst, "Switch to the window you want first")
     }
 }
 
@@ -329,19 +269,5 @@ final class TypoCarryingTests: XCTestCase {
         p.update(level: 0, at: 3)
         p.begin(at: 4)
         XCTAssertEqual(p.pose(at: 4).badge, 0)
-    }
-}
-
-final class DictationClickThroughTests: XCTestCase {
-    private let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
-
-    func testTheDocksSeeThroughScreenOverlayIsNotWhatTheUserClicks() {
-        // The Dock keeps a layer-20 window over the whole screen.
-        XCTAssertTrue(DictationPointerTap.isClickThroughOverlay(layer: 20, bounds: screen, screens: [screen]))
-    }
-
-    func testMenusAndFullScreenAppsAreWhatTheUserClicks() {
-        XCTAssertFalse(DictationPointerTap.isClickThroughOverlay(layer: 101, bounds: CGRect(x: 300, y: 24, width: 220, height: 300), screens: [screen]))
-        XCTAssertFalse(DictationPointerTap.isClickThroughOverlay(layer: 0, bounds: screen, screens: [screen]))
     }
 }

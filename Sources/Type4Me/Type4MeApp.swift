@@ -196,6 +196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         DebugFileLogger.startSession()
         DebugFileLogger.log("applicationDidFinishLaunching")
+        // Week-old recordings and media past its size limit make room.
+        Task.detached(priority: .utility) { await HistoryStore.shared.pruneMedia() }
         floatingBarController = FloatingBarController(state: appState)
         appState.onRecordingControlAction = { [weak self] action in
             self?.recordingControlCoordinator.perform(action)
@@ -325,28 +327,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case .processingResult(let text):
                         appState.showProcessingResult(text)
                         self.hotkeyManager.isProcessing = true
-                    case .recoveryStarted(let text, let message):
-                        appState.showRecovery(text: text, message: message)
-                        self.hotkeyManager.isProcessing = false
-                        self.hotkeyManager.resetActiveState()
-                    case .recoveryPrompt(let text, let message):
-                        appState.showRecoveryPrompt(text: text, message: message)
-                        self.hotkeyManager.isProcessing = false
-                        self.hotkeyManager.resetActiveState()
-                    case .recoverySucceeded(let text, let message):
-                        appState.showRecoveryResult(text: text, message: message)
-                        self.hotkeyManager.isProcessing = false
-                        self.safeResetHotkeyState()
-                    case .recoveryFailed(let text, let message):
-                        appState.showRecoveryResult(text: text, message: message)
-                        self.hotkeyManager.isProcessing = false
-                        self.safeResetHotkeyState()
-                    case .recoveryInterrupted(let text, let message):
-                        if appState.barPhase == .recovering {
-                            appState.showRecoveryResult(text: text, message: message)
-                        }
-                        self.hotkeyManager.isProcessing = false
-                        self.hotkeyManager.resetActiveState()
+                    case .connectionLost(let message):
+                        appState.markConnectionLost(message: message)
+                    case .retryingFullRecording:
+                        appState.networkState = .retrying
                     case .finalized(let text, let injection, let llmFailed):
                         appState.finalize(text: text, outcome: injection, llmFailed: llmFailed)
                         self.hotkeyManager.isProcessing = false
@@ -636,7 +620,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch appState.barPhase {
         case .preparing, .recording, .finishing:
             return false
-        case .hidden, .processing, .recovering, .done, .error:
+        case .hidden, .processing, .done, .error:
             return true
         }
     }
@@ -756,7 +740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch appState.barPhase {
         case .hidden, .done, .error:
             break
-        case .preparing, .recording, .finishing, .processing, .recovering:
+        case .preparing, .recording, .finishing, .processing:
             DebugFileLogger.log("\(source.rawValue) record start blocked phase=\(appState.barPhase)")
             return
         }
@@ -1035,28 +1019,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
 
-                if phase == .recovering {
-                    NSLog("[Type4Me] >>> HOTKEY: recovery press")
-                    DebugFileLogger.log("hotkey recovery press")
-                    MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                    let selectedProvider = KeychainService.selectedASRProvider
-                    let resolvedMode = ASRProviderRegistry.resolvedMode(for: capturedMode, provider: selectedProvider)
-                    let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
-                    Task {
-                        let action = await self.session.handleRecoveryHotkeyPress()
-                        guard action == .interrupted else { return }
-                        await MainActor.run {
-                            self.appState.selectModeForRecording(effectiveMode)
-                            self.appState.startRecording()
-                        }
-                        await self.session.startRecording(
-                            mode: effectiveMode,
-                            isAutomation: false
-                        )
-                    }
-                    return
-                }
-
                 // Block new recording while LLM/injection is still in progress.
                 // The current session must finish (paste + history save) before a new one can start.
                 if phase == .processing {
@@ -1084,11 +1046,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let phase = MainActor.assumeIsolated { self.appState.barPhase }
                 NSLog("[Type4Me] >>> HOTKEY: Record STOP (phase=%@)", String(describing: phase))
                 DebugFileLogger.log("hotkey record stop phase=\(phase)")
-                if phase == .recovering {
-                    MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                    Task { _ = await self.session.handleRecoveryHotkeyPress() }
-                    return
-                }
 
                 MainActor.assumeIsolated {
                     if phase == .preparing {
@@ -1266,9 +1223,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
 
             switch decision {
-            case .recover:
-                MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                Task { _ = await self.session.handleRecoveryHotkeyPress() }
             case .cancel:
                 NSLog("[Type4Me] >>> HOTKEY: Cross-mode finish cancelled in preparing phase")
                 DebugFileLogger.log("hotkey cross-mode finish cancelled in preparing phase")
@@ -1426,7 +1380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // question to process. Tear down the pending start deterministically.
             appState.cancel()
             Task { await self.session.cancelRecording() }
-        case .finishing, .processing, .recovering, .done, .error, .hidden:
+        case .finishing, .processing, .done, .error, .hidden:
             break
         }
     }

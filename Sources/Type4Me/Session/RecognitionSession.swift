@@ -50,14 +50,8 @@ actor RecognitionSession {
         case finishing
         case injecting
         case postProcessing  // Phase 3
-        case recovering
     }
 
-    enum RecoveryHotkeyAction: Equatable, Sendable {
-        case notRecovering
-        case prompted
-        case interrupted
-    }
 
     enum RecordingPurpose: Sendable {
         case input(ProcessingMode)
@@ -479,6 +473,8 @@ actor RecognitionSession {
         recordingStartTime = Date().addingTimeInterval(-10)
         currentTranscript = .empty
         hasReceivedASRText = false
+        streamLost = false
+        endingWithTerminalError = false
         self.speechDetected = speechDetected
         asrClient = client
         currentConfig = config
@@ -502,6 +498,8 @@ actor RecognitionSession {
     }
 
     func stoppedTextForTesting() -> String? { capturedTextOutputForTesting?.text }
+    func keepsUnfinishedRecordingForTesting() -> Bool { unfinishedRecording != nil }
+    func endsWithTerminalErrorForTesting() -> Bool { endingWithTerminalError }
     func speechDetectedForTesting() -> Bool { speechDetected }
     func hasReceivedASRTextForTesting() -> Bool { hasReceivedASRText }
     #endif
@@ -618,18 +616,20 @@ actor RecognitionSession {
     private var audioChunkSenderTask: Task<Void, Never>?
     private var uploadFailureFlag: UploadFailureFlag?
     private var lastStreamingError: Error?
-    private var recoveryTask: Task<Void, Never>?
-    private var recoveryInterruptPromptShown = false
-    private var recoveryRecordId: String?
-    private var recoveryCreatedAt: Date?
-    private var recoveryRawPartialText = ""
-    private var recoveryPartialText = ""
-    private var recoveryDuration: Double = 0
-    private var recoveryModeName: String?
-    private var recoveryModeId: String?
-    private var recoveryTarget: (bundleId: String?, appName: String?) = (nil, nil)
-    private var recoveryProvider: ASRProvider = .volcano
-    private var recoveryASRModel: String?
+    /// The live stream broke while the user was still talking: the microphone
+    /// keeps recording and the whole recording is recognized again on release.
+    private(set) var streamLost = false
+    /// Quotes a rewriting mode carried through as markers: their texts and the
+    /// words before each in its output.
+    private var llmQuoteMarks: (texts: [String], prefixes: [String])?
+    private var finalTimedWordsForDelivery: [TimedWord] = []
+    /// When the last transcript update came in, to tell a slow server from a silent one.
+    private var lastTranscriptAt: ContinuousClock.Instant?
+    /// The recording of a session whose words could not all be recognized,
+    /// kept with its history entry so it can be recognized again.
+    private var unfinishedRecording: Data?
+    /// A server verdict about the account is ending the session; nothing else may.
+    private var endingWithTerminalError = false
 
     /// Flipped to true when mic level exceeds threshold during recording.
     /// When false at stop time, we skip the full ASR teardown (no speech = nothing to finalize).
@@ -936,47 +936,9 @@ actor RecognitionSession {
             await startRecording()
         case .recording:
             await stopRecording()
-        case .recovering:
-            _ = await handleRecoveryHotkeyPress()
         default:
             logger.warning("toggleRecording ignored in state: \(String(describing: self.state))")
         }
-    }
-
-    func handleRecoveryHotkeyPress() async -> RecoveryHotkeyAction {
-        guard state == .recovering else { return .notRecovering }
-
-        if !recoveryInterruptPromptShown {
-            recoveryInterruptPromptShown = true
-            onASREvent?(.recoveryPrompt(
-                text: recoveryPartialText,
-                message: L(
-                    "正在恢复上一次识别。继续按下将打断当前恢复并重新开始录音。",
-                    "Recovering the previous dictation. Press again to interrupt recovery and start a new recording."
-                )
-            ))
-            return .prompted
-        }
-
-        await interruptRecoveryForRestart()
-        return .interrupted
-    }
-
-    private func interruptRecoveryForRestart() async {
-        DebugFileLogger.log("recovery interrupted by hotkey")
-        recoveryTask?.cancel()
-        recoveryTask = nil
-        if !recoveryPartialText.isEmpty {
-            await saveRecoveryHistory(status: "recovery_interrupted", finalText: recoveryPartialText)
-        }
-        onASREvent?(.recoveryInterrupted(
-            text: recoveryPartialText,
-            message: L("已停止恢复，开始新的录音", "Recovery stopped. Starting a new recording.")
-        ))
-        clearRecoveryState()
-        state = .idle
-        currentTranscript = .empty
-        warmUpASRConnection()
     }
 
     // MARK: - Start
@@ -1065,7 +1027,7 @@ actor RecognitionSession {
     ) async {
         let recordingRequestStartedAt = requestedAt ?? ContinuousClock.now
         let sessionEntryAt = ContinuousClock.now
-        if state == .finishing || state == .injecting || state == .postProcessing || state == .recovering {
+        if state == .finishing || state == .injecting || state == .postProcessing {
             NSLog("[Session] startRecording: blocked, current session still processing (state=%@)", String(describing: state))
             DebugFileLogger.log("startRecording blocked: still processing state=\(state)")
             return
@@ -1080,6 +1042,10 @@ actor RecognitionSession {
         let myGeneration = sessionGeneration
         state = .starting
         hasReceivedASRText = false
+        llmQuoteMarks = nil
+        finalTimedWordsForDelivery = []
+        streamLost = false
+        endingWithTerminalError = false
 
         let frontmostApplication = NSWorkspace.shared.frontmostApplication
         let isSelf = frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
@@ -1482,6 +1448,13 @@ actor RecognitionSession {
             }
             NSLog("[Session] ASR connect FAILED provider=%@ error=%@", provider.rawValue, String(describing: error))
             DebugFileLogger.log("ASR connect failed provider=\(provider.rawValue): \(String(describing: error))")
+            if Self.isNetworkFailure(error) {
+                // The user may already be talking: keep the recording and
+                // recognize all of it when they let go.
+                await client.disconnect()
+                markStreamLost(trigger: "connect failed: \(error)")
+                return
+            }
             SoundFeedback.playError()
             audioEngine.stop()
             audioEngine.onAudioChunk = nil
@@ -1880,6 +1853,11 @@ actor RecognitionSession {
             logger.warning("stopRecording called but state is \(String(describing: self.state))")
             return
         }
+        // An account verdict is already ending this session.
+        guard !endingWithTerminalError else {
+            DebugFileLogger.log("stopRecording ignored: terminal server error is ending the session")
+            return
+        }
 
         // Set state BEFORE any await to prevent a second stop from
         // slipping through the guard during the suspension point.
@@ -1913,7 +1891,8 @@ actor RecognitionSession {
 
         // Quick bail: if mic level never exceeded speech threshold, skip the
         // full ASR teardown (no speech = nothing to finalize). Saves 2-7s of waiting.
-        if !speechDetected {
+        // A lost stream never heard the rest, so the recording decides instead.
+        if !speechDetected && !streamLost {
             let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
             DebugFileLogger.log("stop: no speech detected (duration=\(String(format: "%.1f", duration))s), fast exit")
             if let client = asrClient {
@@ -1948,7 +1927,7 @@ actor RecognitionSession {
         let provider = activeProvider
         let providerIsStreaming = ASRProviderRegistry.capabilities(for: provider, config: currentConfig).isStreaming
         let tuning = VolcTuningStorage.effective(for: provider)
-        if providerIsStreaming {
+        if providerIsStreaming && !streamLost {
             let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
             let hasStreamingText = !currentTranscript.composedText
                 .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2036,18 +2015,24 @@ actor RecognitionSession {
             let endAudioTimeout: Duration = providerIsStreaming
                 ? .seconds(3)
                 : .seconds(BatchASRHTTP.requestTimeout + 5)
-            let endAudioOK = await withTimeout(endAudioTimeout) {
-                try await client.endAudio()
+            // Streaming: end the audio and listen for the final words at the
+            // same time, so a slow network costs one wait rather than two.
+            let endAudioTask = Task { [client] in
+                await self.withTimeout(endAudioTimeout) { try await client.endAudio() }
             }
+            let finalArrived = providerIsStreaming
+                ? await awaitFinalTranscriptWhileProgressing(
+                    firstWait: .milliseconds(tuning.finalWaitMs),
+                    quietWait: Self.finalQuietWait,
+                    cap: Self.finalWaitCap
+                )
+                : false
+            let endAudioOK = await endAudioTask.value
             endAudioSucceeded = endAudioOK
             if !endAudioOK {
                 DebugFileLogger.log("endAudio timeout or failed")
                 asrTeardownClean = false
             }
-
-            let finalArrived = providerIsStreaming
-                ? await awaitFinalTranscript(timeout: .milliseconds(tuning.finalWaitMs)) != nil
-                : false
             let commitWithoutFinal = providerIsStreaming && !finalArrived && tuning.commitOnFinalTimeout
             if finalArrived || commitWithoutFinal {
                 // Fast path: isFinal arrived (or the tuning panel chose to commit
@@ -2148,6 +2133,7 @@ actor RecognitionSession {
             if let recordedAudioForTesting { fullAudio = recordedAudioForTesting }
             #endif
             if !fullAudio.isEmpty, let config = currentConfig {
+                onASREvent?(.retryingFullRecording)
                 onASREvent?(.processingResult(text: partialText.isEmpty ? L("重新识别中...", "Retrying recognition...") : partialText))
                 if let batchText = await attemptBatchFallback(audio: fullAudio, config: config, provider: activeProvider) {
                     currentTranscript = RecognitionTranscript(
@@ -2159,6 +2145,9 @@ actor RecognitionSession {
                     DebugFileLogger.log("stop: batch fallback succeeded, \(batchText.count) chars")
                 } else {
                     DebugFileLogger.log("stop: batch fallback failed, using partial text")
+                    // The words heard so far still go to the locked box; the
+                    // recording is kept so it can be recognized again from history.
+                    unfinishedRecording = fullAudio
                 }
             }
             historyASRDurationSeconds = max(0, Date().timeIntervalSince(asrFinishingStartedAt))
@@ -2173,6 +2162,9 @@ actor RecognitionSession {
 
         // Combine confirmed segments + any trailing unconfirmed partial.
         let effectiveText = currentTranscript.displayText
+        // When each final word was said: the most exact place for quotes.
+        let finalTimedWords = currentTranscript.timedWords
+        finalTimedWordsForDelivery = finalTimedWords
         archiveASRSampleIfEnabled(
             rawText: effectiveText,
             provider: provider,
@@ -2206,7 +2198,14 @@ actor RecognitionSession {
             if needsLLM && !finalASRText.isEmpty, let runtime = await resolveLLMRuntime() {
                 rememberHistoryLLM(runtime)
                 let llmConfig = runtime.config
-                let prompt = await promptForCurrentMode(text: finalASRText)
+                // Quotes ride through the rewrite as markers.
+                let markedQuotes = Self.marksQuotes(for: currentMode, purpose: recordingPurpose)
+                    ? await MainActor.run { DictationAttachments.shared.pendingQuotes() }
+                        .map { Self.placedByTime($0, words: finalTimedWords) }
+                    : []
+                let llmInput = markedQuotes.isEmpty ? finalASRText : QuoteMarkers.mark(finalASRText, quotes: markedQuotes)
+                let markedTexts = markedQuotes.map(\.text)
+                let prompt = await promptForCurrentMode(text: llmInput) + (markedQuotes.isEmpty ? "" : QuoteMarkers.instruction)
                 let inputBoundary = llmInputBoundaryForCurrentMode()
                 let client = runtime.client
                 state = .postProcessing
@@ -2215,8 +2214,8 @@ actor RecognitionSession {
                 finalLLMTask = Task {
                     let requestStartedAt = Date()
                     do {
-                        let result = try await client.process(
-                            text: finalASRText,
+                        let raw = try await client.process(
+                            text: llmInput,
                             prompt: prompt,
                             config: llmConfig,
                             inputBoundary: inputBoundary,
@@ -2224,6 +2223,12 @@ actor RecognitionSession {
                                 ? LLMInvocationContext(featureSource: .macAction, modeName: self.currentMode.name)
                                 : .dictation(modeName: self.currentMode.name)
                         )
+                        // Markers never go further than here.
+                        let extracted = QuoteMarkers.extract(raw, count: markedTexts.count)
+                        let result = extracted.text
+                        if !markedTexts.isEmpty {
+                            await self.keepQuoteMarks(texts: markedTexts, prefixes: extracted.prefixes)
+                        }
                         DebugFileLogger.log("stop: final LLM done \(result.count) chars +\(ContinuousClock.now - stopT0)")
                         return TimedLLMResult(
                             text: result,
@@ -2393,6 +2398,7 @@ actor RecognitionSession {
                             output: cleaned,
                             input: intelliSenseGuardInput
                         )
+                        if guarded.rejected { llmQuoteMarks = nil }
                         processedText = guarded.rejected ? nil : guarded.text
                         finalText = guarded.text
                         onASREvent?(.processingResult(text: guarded.text))
@@ -2416,6 +2422,7 @@ actor RecognitionSession {
                         }
                     }
                     llmFailed = true
+                    llmQuoteMarks = nil
                     onASREvent?(.processingResult(text: rawText))
                 }
             } else if needsLLM {
@@ -2670,10 +2677,23 @@ actor RecognitionSession {
             let manualInputHasNoTarget = isManualInput && targetApp == nil
             // What the user brought in while talking goes out with the words;
             // a cancel leaves it for the bar to discard.
-            let delivery = wasCancelled
+            var delivery = wasCancelled
                 ? DictationDelivery()
                 : await MainActor.run { DictationAttachments.shared.takeForDelivery() }
+            // Each quote goes after the words said before the selecting began:
+            // by the rewrite's own markers, else by when each final word was said.
+            let marks = llmQuoteMarks
+            delivery.quotes = delivery.quotes.map { quote in
+                if let marks, let index = marks.texts.firstIndex(of: quote.text) {
+                    var quote = quote
+                    quote.spokenPrefix = marks.prefixes[index]
+                    return quote
+                }
+                return Self.placedByTime(quote, words: finalTimedWordsForDelivery)
+            }
             let deliveredText = DictationDelivery.text(speech: finalText, quotes: delivery.quotes)
+            // Only the words heard before the network broke are going in.
+            let deliversPartially = unfinishedRecording != nil
             let screenshotsAsPaths = DictationDelivery.pastesPaths(into: targetApp?.bundleIdentifier)
             let injectLog = "stop: injecting method=clipboard len=\(finalText.count) quotes=\(delivery.quotes.count) screenshots=\(delivery.screenshots.count) +\(ContinuousClock.now - stopT0)"
             let injectionResult: TrackedInjectionResult = await withCheckedContinuation { continuation in
@@ -2776,7 +2796,9 @@ actor RecognitionSession {
                         }
                     }
                     // Notify UI immediately from this thread, before actor resumes
-                    onEvent?(.finalized(text: finalText, injection: result.outcome, llmFailed: failedLLM))
+                    let shownOutcome: InjectionOutcome = deliversPartially && result.outcome == .inserted
+                        ? .insertedPartial : result.outcome
+                    onEvent?(.finalized(text: finalText, injection: shownOutcome, llmFailed: failedLLM))
                     DebugFileLogger.log("stop: finalized emitted from injection task (llmFailed=\(failedLLM))")
                     // Restoring policies must restore even when there was no
                     // editable destination, otherwise a failed paste leaks text.
@@ -2800,8 +2822,17 @@ actor RecognitionSession {
                 status = clipboardOutputPolicy.cancelledHistoryStatus
             }
             else if llmFailed { status = "llm_error" }
+            else if deliversPartially { status = "stream_partial" }
             else if needsBatchFallback { status = "stream_recovered" }
             else { status = "completed" }
+            let historyAttachments = Self.historyAttachments(
+                recordID: recordId,
+                speech: finalText,
+                delivery: delivery,
+                recording: unfinishedRecording,
+                media: historyStore.media
+            )
+            unfinishedRecording = nil
             let recordTarget = historyTarget(
                 insertedInto: injectionResult.outcome == .inserted
                     ? injectionResult.observationContext?.bundleIdentifier : nil
@@ -2833,7 +2864,8 @@ actor RecognitionSession {
                 processingModeId: currentMode.id.uuidString,
                 targetBundleId: recordTarget.bundleId,
                 targetAppName: recordTarget.appName,
-                attachmentCount: delivery.isEmpty ? nil : delivery.count
+                attachmentCount: delivery.isEmpty ? nil : delivery.count,
+                attachmentsJSON: historyAttachments.json
             ))
             if injectionResult.outcome == .inserted,
                let context = injectionResult.observationContext {
@@ -2910,6 +2942,37 @@ actor RecognitionSession {
             // Note: cancellation details are conveyed through InjectionOutcome / completionMessage,
             // while LLM-failure is conveyed through the .finalized event's llmFailed flag
             // with a distinct warning presentation instead of a green→red error flash.
+        } else if let recording = unfinishedRecording, case .input = recordingPurpose {
+            // The network kept every word from being recognized: nothing to
+            // paste, but the recording is kept to be recognized again.
+            unfinishedRecording = nil
+            let recordID = UUID().uuidString
+            var attachments = HistoryAttachments()
+            attachments.recording = historyStore.media.saveRecording(pcm: recording, id: recordID)
+            let target = historyTarget()
+            await historyStore.insert(HistoryRecord(
+                id: recordID,
+                createdAt: Date(),
+                durationSeconds: recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0,
+                rawText: "",
+                processingMode: currentMode == .direct ? nil : currentMode.name,
+                processedText: nil,
+                finalText: "",
+                status: "stream_unrecognized",
+                characterCount: 0,
+                asrProvider: activeProvider.displayName,
+                asrModel: currentASRModelLabel(for: activeProvider),
+                processingModeId: currentMode.id.uuidString,
+                targetBundleId: target.bundleId,
+                targetAppName: target.appName,
+                attachmentsJSON: attachments.json
+            ))
+            DebugFileLogger.log("stop: nothing recognized through the network; recording kept record=\(recordID)")
+            onASREvent?(.error(StreamLostError(trigger: "unrecognized", message: L(
+                "网络不好，没能识别，录音已存到历史，可重新识别",
+                "Network was poor and nothing was recognized. The recording is in history to try again."
+            ))))
+            onASREvent?(.completed)
         } else {
             // No text recognized: skip history entry (don't save empty records)
             let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
@@ -2937,12 +3000,94 @@ actor RecognitionSession {
         logger.info("Session complete, injected \(effectiveText.count) chars")
     }
 
-    // MARK: - Stream interruption recovery
+    /// A failure of the network itself (as opposed to credentials or the
+    /// request), which recognizing the whole recording later can get past.
+    static func isNetworkFailure(_ error: Error) -> Bool {
+        guard let url = error as? URLError else { return false }
+        switch url.code {
+        case .timedOut, .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost,
+             .cannotFindHost, .dnsLookupFailed, .internationalRoamingOff, .dataNotAllowed:
+            return true
+        default:
+            return false
+        }
+    }
 
-    /// Ends the session and hands the server's own message to the UI, using the
-    /// same teardown the other unrecoverable paths use.
+    // MARK: - Quote placement
+
+    /// Modes that rewrite ordinary dictation carry quote markers; translation
+    /// and Mac actions do not.
+    static func marksQuotes(for mode: ProcessingMode, purpose: RecordingPurpose) -> Bool {
+        guard case .input = purpose else { return false }
+        return mode.id != ProcessingMode.translationModeId && mode.id != ProcessingMode.macActionId
+    }
+
+    /// A quote placed after the words said before its selecting began, when the
+    /// recognizer timed its words; otherwise left as it was placed live.
+    static func placedByTime(_ quote: PlacedQuote, words: [TimedWord]) -> PlacedQuote {
+        guard let time = quote.audioTime, let prefix = TimedWord.prefix(words, through: time) else { return quote }
+        var placed = quote
+        placed.spokenPrefix = prefix
+        return placed
+    }
+
+    private func keepQuoteMarks(texts: [String], prefixes: [String]?) {
+        llmQuoteMarks = prefixes.map { (texts, $0) }
+        DebugFileLogger.log("stop: quote markers \(prefixes == nil ? "lost, placing by words" : "kept") count=\(texts.count)")
+    }
+
+    // MARK: - History attachments
+
+    /// What history keeps of a dictation's extras: each quote and where it went
+    /// into the words, compressed copies of the screenshots, and the recording
+    /// when the network kept it from being fully recognized.
+    static func historyAttachments(
+        recordID: String,
+        speech: String,
+        delivery: DictationDelivery,
+        recording: Data?,
+        media: HistoryMediaStore
+    ) -> HistoryAttachments {
+        var attachments = HistoryAttachments()
+        attachments.quotes = DictationDelivery.placements(speech: speech, quotes: delivery.quotes).map {
+            HistoryAttachments.Quote(text: $0.text, offset: $0.offset)
+        }
+        attachments.screenshots = delivery.screenshots.enumerated().compactMap { index, url in
+            media.saveScreenshot(from: url, id: recordID, index: index)
+        }
+        if let recording {
+            attachments.recording = media.saveRecording(pcm: recording, id: recordID)
+        }
+        return attachments
+    }
+
+    /// Recognizes an unfinished history entry's recording again with the
+    /// selected recognizer and writes the words into the entry. Returns them,
+    /// or nil if it still fails (the recording is then kept).
+    static func recognizeAgain(record: HistoryRecord, store: HistoryStore = .shared) async -> String? {
+        guard var attachments = record.attachments, let file = attachments.recording,
+              let pcm = store.media.loadRecording(id: record.id, file: file), !pcm.isEmpty
+        else { return nil }
+        let provider = KeychainService.selectedASRProvider
+        guard let config = KeychainService.loadASRConfig(for: provider) else { return nil }
+        DebugFileLogger.log("history: recognizing again record=\(record.id) bytes=\(pcm.count)")
+        guard let words = await recognizeWholeRecording(audio: pcm, config: config, provider: provider)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty
+        else { return nil }
+        let text = formattedOutputText(words, mode: .direct)
+        attachments.recording = nil
+        await store.updateRecognizedAgain(id: record.id, text: text, attachments: attachments)
+        return text
+    }
+
+    // MARK: - Stream interruption
+
+    /// Ends the session over a server verdict about the account (quota,
+    /// billing, authentication), using the same teardown the other
+    /// unrecoverable paths use. Words already heard are kept in history.
     private func failWithTerminalServerError(_ error: Error) async {
         guard state != .idle else { return }
+        let heard = currentTranscript.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
         // Hand the reason over first: the teardown below is unrelated to why the
         // session ended, and the message is the only actionable part.
         onASREvent?(.error(error))
@@ -2954,215 +3099,74 @@ actor RecognitionSession {
             await client.disconnect()
         }
         asrClient = nil
+        if !heard.isEmpty {
+            await saveInterruptedHistory(text: formattedOutputText(heard), status: "terminal_error_partial")
+        }
         state = .idle
         hasEmittedReadyForCurrentSession = false
+        endingWithTerminalError = false
         onASREvent?(.completed)
         SystemVolumeManager.restore()
         clearIntelliSenseSessionContext()
     }
 
-    private func beginStreamRecovery(trigger: String) async {
-        guard state == .recording else {
-            DebugFileLogger.log("recovery ignored: state=\(state) trigger=\(trigger)")
+    /// The live stream broke while the user is still talking. The microphone
+    /// keeps recording; when they let go the whole recording is recognized
+    /// again and goes out through the normal delivery — to the locked box,
+    /// with its quotes and screenshots. Nothing is pasted from here.
+    private func markStreamLost(trigger: String) {
+        guard state == .recording, !streamLost, !endingWithTerminalError else {
+            DebugFileLogger.log("stream loss ignored: state=\(state) lost=\(streamLost) trigger=\(trigger)")
             return
         }
-
-        let myGeneration = sessionGeneration
-        let provider = activeProvider
-        let config = currentConfig
-        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-        let rawPartialText = currentTranscript.displayText
-        let partialText = normalizedRecoveryText(rawPartialText)
-        let asrModel = currentASRModelLabel(for: provider)
-
-        DebugFileLogger.log("recovery started trigger=\(trigger) partial=\(partialText.count) chars")
-        state = .recovering
-        recoveryInterruptPromptShown = false
-        recoveryRecordId = UUID().uuidString
-        recoveryCreatedAt = Date()
-        recoveryRawPartialText = rawPartialText
-        recoveryPartialText = partialText
-        recoveryDuration = duration
-        recoveryModeName = currentMode == .direct ? nil : currentMode.name
-        recoveryModeId = currentMode.id.uuidString
-        recoveryTarget = historyTarget()
-        recoveryProvider = provider
-        recoveryASRModel = asrModel
-
-        maxDurationTask?.cancel()
-        maxDurationTask = nil
-        SystemVolumeManager.restore()
-
-        audioEngine.stop()
-        audioEngine.onAudioChunk = nil
-        audioEngine.onAudioLevel = nil
-        await finishAudioChunkPipeline(timeout: .milliseconds(250))
-        let fullAudio = audioEngine.getRecordedAudio()
-
+        streamLost = true
+        DebugFileLogger.log(
+            "stream lost while recording trigger=\(trigger) heard=\(currentTranscript.displayText.count) chars; recording continues"
+        )
+        if lastStreamingError == nil { lastStreamingError = StreamLostError(trigger: trigger) }
+        // The sender stops pumping; the engine keeps the whole recording.
+        uploadFailureFlag?.failed = true
         eventConsumptionTask?.cancel()
         eventConsumptionTask = nil
         if let client = asrClient {
             Task.detached { await client.disconnect() }
         }
         asrClient = nil
-        uploadFailureFlag = nil
-        lastStreamingError = nil
+        onASREvent?(.connectionLost(message: L(
+            "网络断了，继续说，松开后整段识别",
+            "Connection lost. Keep talking — it will all be recognized when you let go."
+        )))
+    }
 
-        if !recoveryPartialText.isEmpty {
-            await saveRecoveryHistory(status: "stream_partial_saved", finalText: recoveryPartialText)
-            injectRecoveryPartial(recoveryPartialText)
-        }
+    struct StreamLostError: LocalizedError {
+        let trigger: String
+        var message: String? = nil
+        var errorDescription: String? { message ?? L("连接中断", "Connection interrupted") }
+    }
 
-        onASREvent?(.recoveryStarted(
-            text: partialText,
-            message: L(
-                "连接中断，已保留当前文字，正在用整段录音重试",
-                "Connection interrupted. Current text was saved; retrying with the full recording."
-            )
+    /// History for a session that ended before its words could be delivered.
+    private func saveInterruptedHistory(text: String, status: String) async {
+        let target = historyTarget()
+        await historyStore.insert(HistoryRecord(
+            id: UUID().uuidString,
+            createdAt: recordingStartTime ?? Date(),
+            durationSeconds: recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0,
+            rawText: text,
+            processingMode: currentMode == .direct ? nil : currentMode.name,
+            processedText: nil,
+            finalText: text,
+            status: status,
+            characterCount: text.count,
+            asrProvider: activeProvider.displayName,
+            asrModel: currentASRModelLabel(for: activeProvider),
+            processingModeId: currentMode.id.uuidString,
+            targetBundleId: target.bundleId,
+            targetAppName: target.appName
         ))
-
-        guard sessionGeneration == myGeneration, state == .recovering else { return }
-        guard !fullAudio.isEmpty, let config else {
-            await finishRecovery(
-                recoveredText: nil,
-                generation: myGeneration,
-                failureMessage: L(
-                    "连接中断，已保留部分识别结果",
-                    "Connection interrupted. Partial recognition was saved."
-                )
-            )
-            return
-        }
-
-        recoveryTask?.cancel()
-        recoveryTask = Task {
-            let recovered = await self.attemptBatchFallback(
-                audio: fullAudio,
-                config: config,
-                provider: provider
-            )
-            self.archiveASRSampleIfEnabled(
-                pcm: fullAudio,
-                rawText: recovered ?? rawPartialText,
-                provider: provider,
-                isStreaming: ASRProviderRegistry.capabilities(for: provider, config: config).isStreaming,
-                status: "stream_recovery"
-            )
-            await self.finishRecovery(
-                recoveredText: recovered,
-                generation: myGeneration,
-                failureMessage: L(
-                    "连接中断，已保留部分识别结果",
-                    "Connection interrupted. Partial recognition was saved."
-                )
-            )
-        }
-    }
-
-    private func finishRecovery(
-        recoveredText: String?,
-        generation: UInt64,
-        failureMessage: String
-    ) async {
-        guard state == .recovering, generation == sessionGeneration, !Task.isCancelled else {
-            return
-        }
-
-        let recovered = recoveredText.map(normalizedRecoveryText)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if let recovered, !recovered.isEmpty {
-            if clipboardOutputPolicy.retainsNormalResult {
-                injectionEngine.copyToClipboard(recovered)
-            }
-            currentTranscript = RecognitionTranscript(
-                confirmedSegments: [recovered],
-                partialText: "",
-                authoritativeText: recovered,
-                isFinal: true
-            )
-            await saveRecoveryHistory(status: "stream_recovered", finalText: recovered)
-            KeychainService.addASRUsage(seconds: recoveryDuration)
-            onASREvent?(.recoverySucceeded(
-                text: recovered,
-                message: L("已恢复完整识别", "Full recognition recovered")
-            ))
-            DebugFileLogger.log("recovery succeeded \(recovered.count) chars")
-        } else {
-            if !recoveryPartialText.isEmpty {
-                await saveRecoveryHistory(status: "stream_partial_saved", finalText: recoveryPartialText)
-                KeychainService.addASRUsage(seconds: recoveryDuration)
-            }
-            onASREvent?(.recoveryFailed(text: recoveryPartialText, message: failureMessage))
-            DebugFileLogger.log("recovery failed, partial=\(recoveryPartialText.count) chars")
-        }
-
-        clearRecoveryState()
-        state = .idle
-        currentTranscript = .empty
-        resetSessionLLMState()
-        SystemVolumeManager.restore()
-        warmUpASRConnection()
-    }
-
-    private func normalizedRecoveryText(_ text: String) -> String {
-        formattedOutputText(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func formattedOutputText(_ text: String) -> String {
         Self.formattedOutputText(text, mode: currentMode)
-    }
-
-    private func injectRecoveryPartial(_ text: String) {
-        let engine = injectionEngine
-        let retainsClipboardResult = clipboardOutputPolicy.retainsNormalResult
-        Task.detached {
-            engine.clipboardRetention = retainsClipboardResult
-                ? .retainResult
-                : .restoreOriginal
-            _ = engine.inject(text)
-            if !retainsClipboardResult {
-                engine.finishClipboardRestore()
-            }
-        }
-    }
-
-    private func saveRecoveryHistory(status: String, finalText: String) async {
-        let recordId = recoveryRecordId ?? UUID().uuidString
-        recoveryRecordId = recordId
-        await historyStore.insert(HistoryRecord(
-            id: recordId,
-            createdAt: recoveryCreatedAt ?? Date(),
-            durationSeconds: recoveryDuration,
-            rawText: recoveryRawPartialText,
-            processingMode: recoveryModeName,
-            processedText: nil,
-            finalText: finalText,
-            status: status,
-            characterCount: finalText.count,
-            asrProvider: recoveryProvider.displayName,
-            asrModel: recoveryASRModel,
-            processingModeId: recoveryModeId,
-            targetBundleId: recoveryTarget.bundleId,
-            targetAppName: recoveryTarget.appName
-        ))
-    }
-
-    private func clearRecoveryState() {
-        recoveryTask?.cancel()
-        recoveryTask = nil
-        recoveryInterruptPromptShown = false
-        recoveryRecordId = nil
-        recoveryCreatedAt = nil
-        recoveryRawPartialText = ""
-        recoveryPartialText = ""
-        recoveryDuration = 0
-        recoveryModeName = nil
-        recoveryModeId = nil
-        recoveryTarget = (nil, nil)
-        recoveryProvider = .volcano
-        recoveryASRModel = nil
-        currentConfig = nil
     }
 
     // MARK: - ASR Events
@@ -3188,7 +3192,11 @@ actor RecognitionSession {
         // Notify UI layer for all non-ready events. Streaming errors during
         // recording become recoverable interruptions, not red error toasts.
         if case .error = event, state == .recording {
-            // beginStreamRecovery surfaces the user-facing state.
+            // A dropped stream keeps recording (markStreamLost tells the UI);
+            // an account verdict is surfaced by failWithTerminalServerError.
+        } else if endingWithTerminalError {
+            // That teardown reports the end once; the server's close must not
+            // end the session a second time.
         } else {
             onASREvent?(event)
         }
@@ -3198,6 +3206,7 @@ actor RecognitionSession {
             break  // handled above
         case .transcript(let transcript):
             currentTranscript = transcript
+            lastTranscriptAt = ContinuousClock.now
             let trimmedDisplay = transcript.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedComposed = transcript.composedText.trimmingCharacters(in: .whitespacesAndNewlines)
             let isPlaceholder = ASRRecognitionMode.isBatchRecordingPlaceholder(trimmedDisplay)
@@ -3235,9 +3244,12 @@ actor RecognitionSession {
                 // how an exhausted quota looked like a recording that stopped by
                 // itself (issue #290).
                 DebugFileLogger.log("terminal ASR server error, skipping recovery: \(error)")
+                // Claim the session now, before the server's close event can
+                // be read as a dropped stream.
+                endingWithTerminalError = true
                 Task { await self.failWithTerminalServerError(error) }
             } else if state == .recording {
-                Task { await self.beginStreamRecovery(trigger: "ASR error: \(error)") }
+                markStreamLost(trigger: "ASR error: \(error)")
             }
 
         case .completed:
@@ -3253,11 +3265,10 @@ actor RecognitionSession {
                 DebugFileLogger.log("stop: .completed resumed finalTranscriptCont (\(text.count) chars)")
                 cont.resume(returning: text.isEmpty ? nil : text)
             }
-            if state == .recording {
+            if state == .recording, !endingWithTerminalError, !streamLost {
                 if lastStreamingError != nil || uploadFailureFlag?.failed == true {
-                    NSLog("[Session] Server closed ASR after interruption, initiating recovery")
                     DebugFileLogger.log("server completed after streaming interruption")
-                    Task { await self.beginStreamRecovery(trigger: "ASR completed after interruption") }
+                    markStreamLost(trigger: "ASR completed after interruption")
                 } else if activeProvider != .grok {
                     NSLog("[Session] Server closed ASR while recording, initiating stop")
                     DebugFileLogger.log("server-initiated stop from recording state")
@@ -3267,9 +3278,8 @@ actor RecognitionSession {
                 }
             }
 
-        case .processingResult, .processingLabelOverride, .recoveryStarted,
-             .recoveryPrompt, .recoverySucceeded, .recoveryFailed,
-             .recoveryInterrupted, .finalized, .macActionResult,
+        case .processingResult, .processingLabelOverride, .connectionLost,
+             .retryingFullRecording, .finalized, .macActionResult,
              .selectionAskStarted, .selectionAskAnswerDelta,
              .selectionAskAnswerCompleted, .selectionAskAnswerFailed,
              .reviseProcessing, .reviseCompleted, .reviseFailed,
@@ -3387,7 +3397,7 @@ actor RecognitionSession {
                 } catch {
                     DebugFileLogger.log("audio chunk send failed: \(error)")
                     failureFlag.failed = true
-                    Task { await self.beginStreamRecovery(trigger: "audio chunk send failed: \(error)") }
+                    Task { await self.markStreamLost(trigger: "audio chunk send failed: \(error)") }
                     // If send fails, stop pumping — connection is dead.
                     break
                 }
@@ -3955,6 +3965,51 @@ actor RecognitionSession {
     /// Wait for the ASR to emit a finalized transcript, with timeout.
     /// "Finalized" means either isFinal flag is set, or confirmed segments exist
     /// with no remaining partial text (Volcano bigmodel_async doesn't send asyncFinal).
+    /// After release, how long to keep waiting once the server stops sending
+    /// revisions, and how long to wait at most while it keeps catching up.
+    static let finalQuietWait: Duration = .milliseconds(2500)
+    static let finalWaitCap: Duration = .seconds(8)
+
+    /// Waits for the final words. While revisions keep arriving (a slow network
+    /// catching up), it waits on until `quietWait` after the latest one, never
+    /// past `cap`; a server that has gone silent is not waited on.
+    private func awaitFinalTranscriptWhileProgressing(
+        firstWait: Duration, quietWait: Duration, cap: Duration
+    ) async -> Bool {
+        let started = ContinuousClock.now
+        var deadline = started + firstWait
+        while true {
+            let remaining = deadline - ContinuousClock.now
+            if remaining > .zero, await awaitFinalTranscript(timeout: remaining) != nil { return true }
+            guard let next = Self.nextFinalDeadline(
+                started: started, lastWords: lastTranscriptAt, quietWait: quietWait, cap: cap, now: ContinuousClock.now
+            ) else { return false }
+            DebugFileLogger.log("stop: words still arriving, waiting on +\(ContinuousClock.now - started)")
+            deadline = next
+        }
+    }
+
+    /// When to stop waiting for the final words: `quietWait` after the latest
+    /// words, within `cap` of release. Nil once that moment has passed.
+    static func nextFinalDeadline(
+        started: ContinuousClock.Instant,
+        lastWords: ContinuousClock.Instant?,
+        quietWait: Duration,
+        cap: Duration,
+        now: ContinuousClock.Instant
+    ) -> ContinuousClock.Instant? {
+        guard let lastWords else { return nil }
+        let next = min(started + cap, lastWords + quietWait)
+        return next > now ? next : nil
+    }
+
+    /// How long recognizing the whole recording again may take: enough for a
+    /// long dictation over a slow link, never the old minute and a half.
+    static func batchFallbackBudget(audioBytes: Int) -> Duration {
+        let seconds = Double(audioBytes) / 32_000
+        return .milliseconds(Int(min(30, 12 + seconds * 0.2) * 1000))
+    }
+
     private func awaitFinalTranscript(timeout: Duration) async -> String? {
         if isTranscriptEffectivelyFinal {
             return currentTranscript.displayText
@@ -4072,6 +4127,17 @@ actor RecognitionSession {
         #if DEBUG
         if let batchFallbackForTesting { return await batchFallbackForTesting() }
         #endif
+        return await Self.recognizeWholeRecording(audio: audio, config: config, provider: provider)
+    }
+
+    /// Recognizes a whole recording in one go with the given provider, within
+    /// `batchFallbackBudget`. Used after a broken stream and from history.
+    static func recognizeWholeRecording(
+        audio: Data,
+        config: any ASRProviderConfig,
+        provider: ASRProvider
+    ) async -> String? {
+        let budget = Self.batchFallbackBudget(audioBytes: audio.count)
         // Soniox: use async REST API instead of re-streaming
         if provider == .soniox, let sonioxConfig = config as? SonioxASRConfig {
             let bypass = ProxyBypassMode.current.bypassASR
@@ -4095,10 +4161,10 @@ actor RecognitionSession {
                     }
                 }
                 Task.detached {
-                    try? await Task.sleep(for: .seconds(90))
+                    try? await Task.sleep(for: budget)
                     if finished.withLock({ let old = $0; $0 = true; return !old }) {
                         resultTask.cancel()
-                        DebugFileLogger.log("batch fallback (async) timeout after 90s")
+                        DebugFileLogger.log("batch fallback (async) timeout after \(budget)")
                         continuation.resume(returning: nil)
                     }
                 }
@@ -4141,7 +4207,7 @@ actor RecognitionSession {
             }
         }
         // Hard timeout via withCheckedContinuation (same pattern as withTimeout).
-        // If resultTask is stuck in a non-cooperative await, we return nil after 90s.
+        // If resultTask is stuck in a non-cooperative await, we return nil after the budget.
         return await withCheckedContinuation { continuation in
             let finished = OSAllocatedUnfairLock(initialState: false)
             Task.detached {
@@ -4151,10 +4217,10 @@ actor RecognitionSession {
                 }
             }
             Task.detached {
-                try? await Task.sleep(for: .seconds(90))
+                try? await Task.sleep(for: budget)
                 if finished.withLock({ let old = $0; $0 = true; return !old }) {
                     resultTask.cancel()
-                    DebugFileLogger.log("batch fallback timeout after 90s")
+                    DebugFileLogger.log("batch fallback timeout after \(budget)")
                     continuation.resume(returning: nil)
                 }
             }
@@ -4189,8 +4255,6 @@ actor RecognitionSession {
         asrCleanupTask?.cancel()
         asrCleanupTask = nil
         asrCleanupGeneration = nil
-        recoveryTask?.cancel()
-        recoveryTask = nil
         resetSessionLLMState()
 
         StartSoundRouteGate.shared.disarm(generation: sessionGeneration)
@@ -4218,7 +4282,8 @@ actor RecognitionSession {
         currentConfig = nil
         uploadFailureFlag = nil
         lastStreamingError = nil
-        clearRecoveryState()
+        streamLost = false
+        endingWithTerminalError = false
         SystemVolumeManager.restore()
     }
 

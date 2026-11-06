@@ -22,7 +22,18 @@ struct TypoPerformance: Equatable {
     enum Reaction: Equatable {
         case done
         case failed
+        /// Only part of the words made it through a bad network.
+        case sheepish
     }
+
+    /// How the network is behaving; it changes how Typo listens and waits.
+    var network: RecordingNetworkState = .normal
+
+    /// After the user lets go: pondering, then waiting patiently, then
+    /// glancing at its wrist and tapping a foot, then a drop of sweat.
+    static let patientAfter: TimeInterval = 1.5
+    static let waitingAfter: TimeInterval = 5
+    static let sweatAfter: TimeInterval = 9
 
     enum Exit: Equatable {
         /// Text landed: a small hop, a key-like press, then down behind the bar.
@@ -393,16 +404,15 @@ struct TypoPerformance: Equatable {
             }
         case .thinking:
             pose.sink = peek.thinking
-            var e = TypoExpression()
-            // Up and away, pondering; or down toward where the text will land.
-            e.look = gaze == 0 ? CGSize(width: -18, height: -26) : CGSize(width: 34 * gaze, height: 14)
-            e.mouth = .flat
-            e.bubble = .question
-            e.bubbleOpacity = min(1, age / 0.18)
-            pose.expression = e
+            pose.expression = thinkingFace(age: age, at: t)
             if !reduceMotion {
-                pose.tiltDegrees = sin(t * 1.7) * 2.5
+                let patient = age >= Self.patientAfter && network != .retrying
+                pose.tiltDegrees = sin(t * (patient ? 0.9 : 1.7)) * 2.5
                 pose.squash = 1 + breath(at: t)
+                if age >= Self.waitingAfter && network != .retrying {
+                    // A light foot tap, about one and a half a second.
+                    pose.hop = CGFloat(pow(max(0, sin(t * 2 * .pi * 1.5)), 6)) * 110
+                }
             }
         case .reacting(let reaction):
             pose.sink = peek.reacting
@@ -438,6 +448,17 @@ struct TypoPerformance: Equatable {
     }
 
     private func listeningFace(at t: TimeInterval) -> TypoExpression {
+        var e = voiceFace(at: t)
+        if network == .lost {
+            // The line dropped: a hand cupped to its ear, still listening.
+            e.armR = .init(up: true, degrees: 20)
+            e.bubble = .offline
+            e.bubbleOpacity = 1
+        }
+        return e
+    }
+
+    private func voiceFace(at t: TimeInterval) -> TypoExpression {
         var e = TypoExpression()
         if level >= Self.talkLevel {
             e.mouth = .talk
@@ -528,9 +549,58 @@ struct TypoPerformance: Equatable {
         return e
     }()
 
+    /// Waiting for the words: the face changes the longer it takes, and a
+    /// recognition retry gets a determined one.
+    func thinkingFace(age: TimeInterval, at t: TimeInterval) -> TypoExpression {
+        var e = TypoExpression()
+        e.mouth = .flat
+        e.bubbleOpacity = min(1, age / 0.18)
+        if network == .retrying {
+            // Rolling up its sleeves for another go.
+            e.eyeL = .chevron
+            e.eyeR = .chevron
+            e.armL = .init(up: true, degrees: 10)
+            e.armR = .init(up: true, degrees: 50)
+            e.bubble = .retry
+            e.bubbleOpacity = 1
+            return e
+        }
+        if age < Self.patientAfter {
+            // Up and away, pondering; or down toward where the text will land.
+            e.look = gaze == 0 ? CGSize(width: -18, height: -26) : CGSize(width: 34 * gaze, height: 14)
+            e.bubble = .question
+            return e
+        }
+        if age < Self.waitingAfter {
+            // Calm, half-closed eyes; the dots say it is still coming.
+            e.eyeL = .relaxed
+            e.eyeR = .relaxed
+            e.look = CGSize(width: -10, height: 8)
+            e.bubble = .dots
+            e.bubbleOpacity = 1
+            return e
+        }
+        // Glances at its wrist now and then.
+        let checkingWatch = (t - stageStart).truncatingRemainder(dividingBy: 2.4) < 1.0
+        if checkingWatch {
+            e.look = CGSize(width: -30, height: 24)
+            e.armL = .init(up: true, degrees: -18)
+        }
+        e.bubble = .hourglass
+        e.bubbleOpacity = 1
+        e.sweat = age >= Self.sweatAfter
+        return e
+    }
+
     static func face(for reaction: Reaction) -> TypoExpression {
         var e = TypoExpression()
         switch reaction {
+        case .sheepish:
+            e.eyeL = .sad
+            e.eyeR = .sad
+            e.mouth = .flat
+            e.sweat = true
+            e.blush = true
         case .done:
             e.eyeL = .happy
             e.eyeR = .happy
