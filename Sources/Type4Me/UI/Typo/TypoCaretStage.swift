@@ -403,9 +403,6 @@ final class TypoCaretStage {
         performance.heard(state.transcriptionText, at: now)
         let attachments = DictationAttachments.shared
         performance.carrying(attachments.carried(at: now), at: now)
-        // Cards fly to Typo's chest while it stands by the caret.
-        attachments.caretCatchPoint = performance.isVisible && !isExiting
-            ? CGPoint(x: feet.x, y: feet.y + bodyHeight * 0.6) : nil
         performance.update(level: state.audioLevel.current, at: now)
         var pose = performance.pose(at: now)
         pose.expression.bubbleScale = TypoCaretLayout.bubbleScale

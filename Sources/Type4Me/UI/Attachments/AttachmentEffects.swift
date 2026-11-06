@@ -21,15 +21,33 @@ private final class EffectPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// What the capture surfaces say, in the current language.
+enum AttachmentCopy {
+    static var clickHint: String { L("点击窗口截图 · ⌘+点击照常操作", "Click a window to capture · ⌘-click to use it") }
+    static var area: String { L("框选", "Area") }
+    static var areaHelp: String { L("拖动框选屏幕上的一块区域截图", "Drag a box over the screen to capture it") }
+    static var regionHint: String { L("拖动框选要截的区域 · Esc 取消", "Drag to capture an area · Esc to cancel") }
+}
+
+/// Short forms of a quote for chips, cards and the bar.
+enum AttachmentPreview {
+    static func short(_ quote: String, limit: Int = 14) -> String {
+        let flat = quote.replacingOccurrences(of: "\n", with: " ")
+        return flat.count > limit ? String(flat.prefix(limit)) + "…" : flat
+    }
+}
+
 /// The moment of a capture: an outline flashes on what was taken, then a small
-/// card of it flies in an arc to Typo (or to the tray when Typo is on the bar).
+/// card of it flies in an arc: a quote into the words on the bar, a screenshot
+/// to the tray above it.
 @MainActor
 enum AttachmentEffects {
     static let accent = NSColor(calibratedRed: 0.16, green: 0.47, blue: 1, alpha: 1)
 
     static func play(_ item: DictationAttachment, to target: CGPoint?) {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        if item.source.width > 1, item.source.height > 1 { flash(item.source) }
+        // A screenshot flashed when the shutter fired.
+        if case .quote = item.kind, item.source.width > 1, item.source.height > 1 { flash(item.source) }
         guard let target, !reduceMotion else { return }
         let start = item.source.width > 1
             ? CGPoint(x: item.source.midX, y: item.source.midY)
@@ -39,7 +57,7 @@ enum AttachmentEffects {
 
     // MARK: - Outline
 
-    private static func flash(_ rect: CGRect) {
+    static func flash(_ rect: CGRect) {
         let frame = rect.insetBy(dx: -5, dy: -4)
         let panel = EffectPanel(frame: frame.insetBy(dx: -3, dy: -3))
         let view = NSView(frame: CGRect(origin: .zero, size: panel.frame.size))
@@ -183,8 +201,9 @@ final class DictationAttachmentTray {
         panel.animationBehavior = .none
         panel.contentView = host
         attachments.onCapture = { [weak self] item in
-            self?.refresh()
-            AttachmentEffects.play(item, to: DictationAttachments.shared.catchPoint)
+            guard let self else { return }
+            self.refresh()
+            AttachmentEffects.play(item, to: self.catchPoint(for: item))
         }
         observe()
     }
@@ -195,6 +214,8 @@ final class DictationAttachmentTray {
             _ = attachments.items
             _ = attachments.notice
             _ = attachments.isCollecting
+            _ = attachments.hasArmedWindow
+            _ = attachments.quotesShowInline
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.refresh()
@@ -205,11 +226,13 @@ final class DictationAttachmentTray {
     }
 
     private var shows: Bool {
-        bar.isVisible && (!attachments.items.isEmpty || attachments.notice != nil)
+        bar.isVisible && (
+            !attachments.trayItems.isEmpty || attachments.notice != nil
+                || (attachments.isCollecting && attachments.hasArmedWindow)
+        )
     }
 
     func refresh() {
-        updateCatchPoint()
         guard shows else {
             if panel.isVisible {
                 bar.removeChildWindow(panel)
@@ -239,14 +262,14 @@ final class DictationAttachmentTray {
         }
     }
 
-    /// With Typo on the bar, cards land where the next chip appears.
-    private func updateCatchPoint() {
-        guard bar.isVisible else {
-            attachments.trayCatchPoint = nil
-            return
+    /// A quote flies into the words on the bar; anything else to where its chip appears.
+    private func catchPoint(for item: DictationAttachment) -> CGPoint? {
+        guard bar.isVisible else { return nil }
+        if case .quote = item.kind, attachments.quotesShowInline {
+            return CGPoint(x: bar.frame.midX + 30, y: bar.frame.midY)
         }
-        attachments.trayCatchPoint = panel.isVisible
-            ? CGPoint(x: panel.frame.maxX - 16, y: panel.frame.midY)
+        return panel.isVisible
+            ? CGPoint(x: panel.frame.minX + 30, y: panel.frame.midY)
             : CGPoint(x: bar.frame.midX, y: bar.frame.maxY + 16)
     }
 }
@@ -258,8 +281,7 @@ struct AttachmentChip: View {
     @AppStorage("tf_language") private var language = AppLanguage.current.rawValue
 
     static func preview(of quote: String) -> String {
-        let flat = quote.replacingOccurrences(of: "\n", with: " ")
-        return flat.count > 14 ? String(flat.prefix(14)) + "…" : flat
+        AttachmentPreview.short(quote)
     }
 
     var body: some View {
@@ -309,15 +331,43 @@ struct AttachmentTrayView: View {
     var body: some View {
         let _ = language
         HStack(spacing: 6) {
-            ForEach(attachments.items) { item in
+            ForEach(attachments.trayItems) { item in
                 AttachmentChip(item: item) { attachments.remove(item.id) }
             }
             if let notice = attachments.notice {
                 noticeChip(notice)
             }
+            if attachments.isCollecting {
+                regionButton
+            }
         }
         .padding(4)
         .fixedSize()
+    }
+
+    /// Box capture, and while a window is ready, how to use the dot.
+    private var regionButton: some View {
+        HStack(spacing: 6) {
+            if attachments.hasArmedWindow && attachments.trayItems.isEmpty {
+                Text(AttachmentCopy.clickHint)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Button { attachments.captureRegion() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "rectangle.dashed").font(.system(size: 10, weight: .semibold))
+                    Text(AttachmentCopy.area).font(.system(size: 11, weight: .semibold))
+                    Text("⌥S").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .help(AttachmentCopy.areaHelp)
+            .accessibilityLabel(L("框选截图", "Capture an area"))
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
     }
 
     @ViewBuilder
@@ -349,5 +399,114 @@ struct AttachmentTrayView: View {
         .padding(.horizontal, 8)
         .frame(height: 24)
         .background(.regularMaterial, in: Capsule())
+    }
+}
+
+// MARK: - Pointer dot and window outline
+
+/// The dot beside the pointer while a click would shoot the window under it.
+/// macOS lets an app in the background change no other app's pointer, so the
+/// dot is a tiny window that follows it.
+@MainActor
+final class PointerDot {
+    static let size: CGFloat = 14
+    /// Below and right of the arrow's tip, clear of the arrow itself.
+    static let offset = CGPoint(x: 11, y: -20)
+
+    private var panel: EffectPanel?
+    private var dotLayer: CALayer?
+
+    func show(at pointer: CGPoint) {
+        let panel = self.panel ?? make()
+        panel.setFrameOrigin(CGPoint(x: pointer.x + Self.offset.x, y: pointer.y + Self.offset.y))
+        if !panel.isVisible {
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.12; panel.animator().alphaValue = 1 }
+        }
+    }
+
+    func hide() {
+        guard let panel, panel.isVisible else { return }
+        panel.orderOut(nil)
+    }
+
+    /// The shutter fired.
+    func pulse() {
+        let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+        pulse.values = [1, 0.55, 1.25, 1]
+        pulse.keyTimes = [0, 0.25, 0.6, 1]
+        pulse.duration = 0.3
+        dotLayer?.add(pulse, forKey: "pulse")
+    }
+
+    private func make() -> EffectPanel {
+        let panel = EffectPanel(frame: CGRect(x: 0, y: 0, width: Self.size, height: Self.size))
+        panel.level = .screenSaver
+        let view = NSView(frame: CGRect(x: 0, y: 0, width: Self.size, height: Self.size))
+        view.wantsLayer = true
+        let dot = CALayer()
+        dot.frame = view.bounds.insetBy(dx: 1.5, dy: 1.5)
+        dot.cornerRadius = dot.frame.width / 2
+        dot.backgroundColor = NSColor.black.cgColor
+        dot.borderColor = NSColor.white.cgColor
+        dot.borderWidth = 2
+        dot.shadowOpacity = 0.35
+        dot.shadowRadius = 1.5
+        dot.shadowOffset = CGSize(width: 0, height: -0.5)
+        view.layer?.addSublayer(dot)
+        panel.contentView = view
+        self.panel = panel
+        dotLayer = dot
+        return panel
+    }
+}
+
+/// A soft outline around the window a click would shoot.
+@MainActor
+final class WindowOutline {
+    private var panel: EffectPanel?
+    private var shape: CAShapeLayer?
+    private var shown: CGRect?
+
+    func show(_ frame: CGRect) {
+        let panel = self.panel ?? make()
+        if shown != frame {
+            shown = frame
+            let outer = frame.insetBy(dx: -3, dy: -3)
+            panel.setFrame(outer, display: false)
+            shape?.frame = CGRect(origin: .zero, size: outer.size)
+            shape?.path = CGPath(
+                roundedRect: CGRect(origin: .zero, size: outer.size).insetBy(dx: 1.5, dy: 1.5),
+                cornerWidth: 12, cornerHeight: 12, transform: nil
+            )
+        }
+        if !panel.isVisible {
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.15; panel.animator().alphaValue = 1 }
+        }
+    }
+
+    func hide() {
+        guard let panel, panel.isVisible else { return }
+        panel.orderOut(nil)
+        shown = nil
+    }
+
+    private func make() -> EffectPanel {
+        let panel = EffectPanel(frame: .zero)
+        let view = NSView(frame: .zero)
+        view.wantsLayer = true
+        view.autoresizesSubviews = true
+        let shape = CAShapeLayer()
+        shape.fillColor = AttachmentEffects.accent.withAlphaComponent(0.05).cgColor
+        shape.strokeColor = AttachmentEffects.accent.withAlphaComponent(0.75).cgColor
+        shape.lineWidth = 2
+        view.layer?.addSublayer(shape)
+        panel.contentView = view
+        self.panel = panel
+        self.shape = shape
+        return panel
     }
 }

@@ -468,6 +468,43 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
         return text
     }
+
+    /// Quotes the user brought in sit inside the words, where they were talking.
+    private var liveTranscriptPieces: [DictationDelivery.Piece] {
+        let text = presentedTranscriptionText
+        guard showsInlineQuotes, !ASRRecognitionMode.isBatchRecordingPlaceholder(text) else { return [.speech(text)] }
+        let quotes = DictationAttachments.shared.inlineQuotes
+        guard !quotes.isEmpty else { return [.speech(text)] }
+        return DictationDelivery.pieces(speech: text, quotes: quotes)
+    }
+
+    private var showsInlineQuotes: Bool {
+        effectiveShowsLiveTranscript && !state.isNonRealtimeASR
+    }
+
+    /// The words as shown, quotes marked, for measuring.
+    private var displayedTranscriptionText: String {
+        String(displayedTranscript.characters)
+    }
+
+    private var displayedTranscript: AttributedString {
+        var out = AttributedString()
+        var last: Character?
+        for piece in liveTranscriptPieces {
+            switch piece {
+            case .speech(let words):
+                out += AttributedString(words)
+                last = words.last ?? last
+            case .quote(let quote, let next):
+                // Spaced languages keep a space on either side of the mark.
+                if let last, DictationDelivery.needsSpace(between: last, and: "❝") { out += AttributedString(" ") }
+                out += LiveQuoteMark.attributed(quote)
+                if let next, DictationDelivery.needsSpace(between: "❞", and: next) { out += AttributedString(" ") }
+                last = "❞"
+            }
+        }
+        return out
+    }
     private var presentedProcessingLabel: String { exitSnapshot?.processingLabel ?? state.effectiveProcessingLabel }
     private var presentedFeedbackMessage: String { exitSnapshot?.feedbackMessage ?? state.feedbackMessage }
     private var presentedFeedbackKind: FeedbackKind { exitSnapshot?.feedbackKind ?? state.feedbackKind }
@@ -583,7 +620,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
             hoverPreviewEnabled: effectiveHoverTranscriptPreview,
             isHoverActive: isTranscriptHoverActive,
             isNonRealtimeASR: state.isNonRealtimeASR,
-            textOverflowsBar: measureText(presentedTranscriptionText) + currentRecordingChromeWidth > TF.barWidth
+            textOverflowsBar: measureText(displayedTranscriptionText) + currentRecordingChromeWidth > TF.barWidth
         )
     }
 
@@ -805,6 +842,11 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
         .onChange(of: state.segments) { _, _ in
             updateRecordingPeakWidthIfNeeded()
+        }
+        .onChange(of: showsInlineQuotes, initial: true) { _, inline in
+            if DictationAttachments.shared.quotesShowInline != inline {
+                DictationAttachments.shared.quotesShowInline = inline
+            }
         }
         .onChange(of: state.transcriptionText) { _, text in
             if !text.isEmpty && !usesCompactPresentation && !ASRRecognitionMode.isBatchRecordingPlaceholder(text) {
@@ -1085,7 +1127,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     private var compactRecordingContent: some View {
         if effectiveShowsLiveTranscript {
             VStack(spacing: 0) {
-                CompactLiveTranscriptRow(text: presentedTranscriptionText, theme: effectiveTheme)
+                CompactLiveTranscriptRow(text: displayedTranscriptionText, theme: effectiveTheme)
                 compactRecordingControls
             }
             .frame(width: TF.compactIndicatorWidth, height: TF.compactTranscriptExpandedHeight)
@@ -1307,7 +1349,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
             && !presentedSegments.isEmpty
             && !state.isNonRealtimeASR
             && !ASRRecognitionMode.isBatchRecordingPlaceholder(presentedTranscriptionText) {
-            Text(presentedTranscriptionText)
+            Text(displayedTranscript)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(effectiveTheme == .light ? TF.floatingTextLight : TF.floatingText)
         } else {
@@ -1682,7 +1724,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var transcriptPopupHeight: CGFloat {
         let textWidth = TF.transcriptPopupWidth - 24
-        let bounds = (presentedTranscriptionText as NSString).boundingRect(
+        let bounds = (displayedTranscriptionText as NSString).boundingRect(
             with: NSSize(width: textWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: [.font: floatingBarFont]
@@ -1736,7 +1778,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         switch overlay {
         case .transcript:
             TranscriptPopup(
-                text: presentedTranscriptionText,
+                text: displayedTranscript,
                 height: transcriptPopupHeight,
                 theme: effectiveTheme,
                 onHoverChanged: updateTranscriptHover
@@ -2059,7 +2101,7 @@ private struct GlassOuterShadow: View {
 }
 
 private struct TranscriptPopup: View {
-    let text: String
+    let text: AttributedString
     let height: CGFloat
     var theme: RecordingTheme = .dark
     let onHoverChanged: (Bool) -> Void
@@ -2286,5 +2328,19 @@ final class HoverTrackingNSView: NSView {
     private var containsMouse: Bool {
         guard let window else { return false }
         return bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+    }
+}
+
+
+/// A quote inside the live words on the bar: ❝ its first words ❞, tinted.
+@MainActor
+enum LiveQuoteMark {
+    static func text(_ quote: String) -> String { "\u{2009}❝ \(quote) ❞\u{2009}" }
+
+    static func attributed(_ quote: String) -> AttributedString {
+        var mark = AttributedString(text(quote))
+        mark.foregroundColor = Color(nsColor: AttachmentEffects.accent).opacity(0.95)
+        mark.backgroundColor = Color(nsColor: AttachmentEffects.accent).opacity(0.18)
+        return mark
     }
 }

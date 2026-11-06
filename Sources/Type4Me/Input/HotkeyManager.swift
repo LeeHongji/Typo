@@ -865,6 +865,8 @@ final class HotkeyManager: NSObject {
         // ESC key (keyCode 53) - abort active recording or processing
         if isESCAbortEnabled && type == .keyDown && keyCode == 53 {
             if passesEscapeToInputMethod?() == true { return Unmanaged.passUnretained(event) }
+            // Esc while a box is being drawn to shoot cancels the box, not the recording.
+            if DictationRegionCaptureState.isActive { return Unmanaged.passUnretained(event) }
             let hotkeyOwnedSession = activeRecordingBindingId != nil || holdState.values.contains(true)
             // A recording session may also be driven outside the hotkey system
             // (e.g. a `type4me://` URL Scheme command), in which case none of this

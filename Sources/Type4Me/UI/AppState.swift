@@ -1651,6 +1651,7 @@ final class AppState {
         if collectsAttachments,
            let front = NSWorkspace.shared.frontmostApplication,
            front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            DictationAttachments.shared.transcriptProvider = { [weak self] in self?.transcriptionText ?? "" }
             DictationAttachments.shared.begin(
                 targetPID: front.processIdentifier,
                 targetWindowID: DictationDestination.frontWindowID(of: front.processIdentifier)
