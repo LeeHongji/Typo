@@ -1,7 +1,7 @@
 # Type4Me 文档中心
 
 > 文档状态：当前有效
-> 最后整理：2026-10-27
+> 最后整理：2026-11-14
 
 这里是仓库文档的唯一入口。功能设计、开发设计和历史材料不再平铺在 `docs/` 根目录。
 
@@ -21,6 +21,9 @@
 
 | 功能 | 文档 | 类型 | 状态 | 设计日期 | 实现基线 |
 |---|---|---|---|---:|---|
+| Typo 小键帽 | [录音陪伴角色](features/typo-companion/design.md) | 产品与开发设计 | 已实现，待用户按应用验收 | 2026-10-30 | `ff15b69` |
+| 锁定输入目标与引用、截图 | [设计](features/dictation-target-and-attachments/design.md) | 产品与开发设计 | 已实现，待用户验收 | 2026-11-06 | `ff15b69` |
+| 断网保护 | [网络不好时不丢字](features/network-resilience/design.md) | 专项开发设计 | 已实现，待用户验收 | 2026-11-07 | `ff15b69` |
 | 选中纠正 | [产品设计](features/voice-correction/product-design.md) / [开发设计](features/voice-correction/development-design.md) | 产品与开发设计 | 已实现，持续验证 | 2026-10-27 | `d8081b71`（PR #392） |
 | 手机版 | [iPhone 语音键盘与 Mac 配置同步](features/mobile-app/design.md) | 产品与开发设计 | 已实现，测试中 | 2026-10-25 | `9334f5d1`（PR #372） |
 | 火山识别方案 | [准确 / 快速 / 自定义](features/volc-recognition-presets/design.md) | 产品与开发设计 | 已实现，待用户验收 | 2026-10-24 | main |
@@ -54,6 +57,17 @@
 | Ask Anything | [历史会话开发设计](features/ask-anything/conversation-history-development-design.md) | 开发设计 | 已实现，持续验证 | 2026-08-10 | `3f4212a` |
 | Intelli Sense | [产品设计](features/intelli-sense/product-design.md) | 产品设计 | 首版已实现，持续校准 | 2026-08-09 | `302e9b4`，修订至 `9d91b92` |
 | Intelli Sense | [开发设计](features/intelli-sense/development-design.md) | 开发设计 | 首版已实现，持续校准 | 2026-08-09 | `302e9b4`，修订至 `9d91b92` |
+
+以下文档在 2026-11-14 整理时补登记。它们的页首仍是合入前的状态和分支名，登记的状态照抄页首，未逐份对照代码复核：
+
+| 功能 | 文档 | 类型 | 页首状态 | 设计日期 |
+|---|---|---|---|---:|
+| URL 录音控制 | [产品设计](features/url-recording-commands/product-design.md) / [开发设计](features/url-recording-commands/development-design.md) | 产品与开发设计 | 已实现 | 2026-08-24 |
+| MiMo ASR | [产品设计](features/mimo-asr/product-design.md) / [开发设计](features/mimo-asr/development-design.md) | 产品与开发设计 | 设计中（代码中已有 `MiMoASRClient`） | 2026-08-24 |
+| 菜单栏运行控制中心 | [产品设计](features/menubar-control-center/product-design.md) / [开发设计](features/menubar-control-center/development-design.md) | 产品与开发设计 | 已实现（待 DEV App 实机验收） | 2026-08-23 |
+| 剪贴板保留策略 | [产品设计](features/clipboard-retention/product-design.md) / [开发设计](features/clipboard-retention/development-design.md) | 产品与开发设计 | 已实现（待 DEV App 手动验收） | 2026-08-23 |
+| 外观预览 | [产品设计](features/appearance-preview/product-design.md) / [开发设计](features/appearance-preview/development-design.md) | 产品与开发设计 | 设计中（代码中已有外观预览及测试） | 2026-08-25 |
+| 紧凑型录音指示条 | [产品设计](features/compact-recording-indicator/product-design.md) / [开发设计](features/compact-recording-indicator/development-design.md) | 产品与开发设计 | 设计中（代码中已有紧凑指示条） | 2026-08-25 |
 
 ### 推荐阅读顺序
 
@@ -94,15 +108,40 @@
 ```text
 docs/
 ├── README.md                         # 当前入口与规范
-├── features/                         # 当前功能设计
-│   ├── ask-anything/
+├── features/                         # 当前功能设计，每个功能一个目录
+│   ├── appearance-preview/
 │   ├── appearance-settings-enhancements/
+│   ├── ask-anything/
+│   ├── clipboard-retention/
 │   ├── compact-live-transcript/
+│   ├── compact-recording-indicator/
+│   ├── current-focus-injection/
+│   ├── dictation-target-and-attachments/
+│   ├── draggable-floating-bar/
 │   ├── gemini-transcribe-asr/
+│   ├── groq-asr/
 │   ├── intelli-sense/
 │   ├── liquid-glass-recording-indicator/
+│   ├── magpie-llm-provider/
+│   ├── manual-input/
+│   ├── menubar-control-center/
+│   ├── meta-muse-asr/
+│   ├── mimo-asr/
+│   ├── mistral-asr/
+│   ├── mobile-app/
+│   ├── network-resilience/
+│   ├── permission-onboarding-redesign/
+│   ├── release-to-text/
 │   ├── revise/
-│   └── translation/
+│   ├── runtime/
+│   ├── setup-guide/
+│   ├── tencent-asr/
+│   ├── translation/
+│   ├── typo-companion/
+│   ├── url-recording-commands/
+│   ├── usage-analytics/
+│   ├── voice-correction/
+│   └── volc-recognition-presets/
 ├── guides/                           # 当前维护与操作指南
 ├── usage/                            # 用户指南（README 拆出的详细说明）
 ├── archive/                          # 不再生效的历史材料
@@ -118,6 +157,7 @@ docs/
 
 以下文档与产物按代码职责留在原目录，不搬入 `docs/`：
 
+- `design/typo/`：Typo 原画、描摹工具、原型和关键帧渲染脚本；
 - `README.md`（中英双语同页）、`docs/CHANGELOG.md`、`AGENTS.md`（及其 `CLAUDE.md` 符号链接）：仓库入口、版本记录和代理说明；
 - `.github/CONTRIBUTING.md`：从源码构建、签名和架构概览；
 - `Tests/IntelliSenseEval/README.md`：独立评测包使用说明；

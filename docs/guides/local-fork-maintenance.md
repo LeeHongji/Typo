@@ -11,6 +11,21 @@ upstream. The goals are:
 - keep the local Apple Silicon ASR path stable for daily use;
 - keep patches small enough to submit upstream as focused PRs.
 
+## Repository
+
+> 本节于 2026-11-14 补充。
+
+- `origin`: `https://github.com/LeeHongji/Typo` (public). All fork work is pushed here.
+- Upstream: `https://github.com/joewongjc/type4me`. No `upstream` remote is configured in this checkout; add one before syncing.
+- The fork's `main` started from the upstream import `99c66e9` (2026-10-28).
+- The repository is public: check for credentials before every push.
+
+Fork-only features, each with its own design document under `docs/features/`:
+
+- Typo keycap companion (`typo-companion`);
+- locked dictation target with quotes and screenshots (`dictation-target-and-attachments`);
+- network-loss recovery (`network-resilience`).
+
 ## Current Patch Set
 
 ### Qwen3-ASR memory control

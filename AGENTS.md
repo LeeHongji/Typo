@@ -7,6 +7,12 @@ Local ASR: SenseVoice via native sherpa-onnx (streaming) + Qwen3-ASR (final cali
 Cloud ASR: 18 providers implemented (Volcano, StepFun, MiMo batch, OpenAI, Microsoft Azure MAI, Deepgram, Cartesia, AssemblyAI, ElevenLabs, Gemini, Grok, Soniox, Bailian, Baidu, Meta Muse, Groq batch, Mistral AI batch, Tencent Cloud), plus Apple Speech. StepFun, Bailian, Gemini, ElevenLabs, Grok, Microsoft Azure, and Tencent Cloud let users switch between real-time streaming and batch recognition.
 Swift Package Manager project, no Xcode project file. Optional `sherpa-onnx.xcframework` enables local SenseVoice, Silero VAD, and punctuation restoration.
 
+### This repository
+
+This checkout is a fork. `origin` is `https://github.com/LeeHongji/Typo` (public); the upstream project is `joewongjc/type4me`. The fork adds the Typo keycap companion, the locked dictation target with quotes and screenshots, and network-loss recovery on top of the upstream baseline `99c66e9`. The app, bundle identifier, and user-facing name remain Type4Me; "Typo" names the mascot and the repository only. README download links and badges still point at upstream releases because this fork publishes none.
+
+Documentation lives under `docs/`; `docs/README.md` is the index and states which documents are current. Code wins when a document disagrees with it.
+
 ## Branch Naming and Lifecycle
 
 Use one short-lived branch for one independently reviewable change. Branches must
@@ -232,6 +238,7 @@ API keys and other secure values are stored in Keychain, not in this file.
 | Microphone | Audio capture |
 | Speech Recognition | Apple Speech recognition engine |
 | Accessibility | Global hotkey listening + text injection into other apps |
+| Screen Recording | Screenshots taken while dictating (⌥S / ⌥⇧S); requested on first use |
 
 ## Key Files
 
@@ -279,6 +286,15 @@ API keys and other secure values are stored in Keychain, not in this file.
 | `Sources/Type4Me/Database/HistoryStore.swift` | Persistent transcription and processing history |
 | `Sources/Type4MeIntelliSenseCore/` | Intelli Sense context, guard, and preference-learning core |
 | `Sources/Type4MeReviseCore/` | Voice Revise tracking, slot targeting, and replacement core |
+| `Sources/Type4Me/UI/Typo/` | Typo companion: renderer, performance state machine, voice-driven motion, cached sprites, bar and caret placement |
+| `Sources/Type4Me/Services/CaretLocator.swift` | Tiered Accessibility lookup of the text caret rectangle; `CaretWatcher.swift` listens for caret/text/focus notifications |
+| `Sources/Type4Me/Injection/DictationDestination.swift` | App, window, and text box locked at recording start; decides paste here / bring back / refocus / gone at delivery |
+| `Sources/Type4Me/Services/DictationAttachments.swift` | Quotes and screenshots collected while recording, quote placement, delivery formatting |
+| `Sources/Type4Me/Services/DictationShortcutTap.swift` | ⌥S window shot, ⌥⇧S region shot, Esc cancels the region, on its own event-tap thread |
+| `Sources/Type4Me/UI/Attachments/` | Capture effects, attachment tray above the bar, region-capture overlay |
+| `Sources/Type4Me/Database/HistoryMedia.swift` | Compressed screenshots and unfinished recordings kept with history entries |
+| `Sources/Type4MeCorrectionCore/`, `Sources/Type4MeTransferCore/` | Selection-correction core; Mac-to-iPhone configuration transfer core |
+| `iOS/` | iPhone keyboard app (XcodeGen `project.yml`, see `iOS/README.md`) |
 | `Sources/Type4Me/LLM/Magpie/` | Magpie local gateway discovery, agent file parsing, model catalog, and reconciliation |
 | `Sources/Type4Me/LLM/LLMProvider.swift` | 16 LLM providers, including Xiaomi MiMo, Codex CLI, local Ollama, and Magpie |
 | `Sources/Type4Me/LLM/LLMProviderRegistry.swift` | LLM provider → config + client factory |
@@ -287,6 +303,20 @@ API keys and other secure values are stored in Keychain, not in this file.
 | `scripts/dev-run.sh` | Signed Dev App build, install, and launch |
 | `scripts/deploy.sh` | Build + deploy + launch |
 | `scripts/build-sherpa.sh` | Build sherpa-onnx.xcframework for optional local ASR features |
+
+## Typo Companion, Locked Target, Attachments, Network Recovery
+
+Design documents: `docs/features/typo-companion/design.md`, `docs/features/dictation-target-and-attachments/design.md`, `docs/features/network-resilience/design.md`. Read the relevant one before changing these areas.
+
+- **Typo** is off by default (`tf_typoCompanionEnabled`, Settings → Appearance). It never replaces the recording bar. `TypoPlacement.mode` guarantees one Typo on screen: `.bar` (peeking over the capsule) or `.caret` (in its own non-activating panel beside the text caret). When the caret cannot be read, Typo stays at the bar; standing on the text box or window was tried and withdrawn at the user's request.
+- `TypoPerformance` is a pure value type driven by events and a caller-supplied clock. Keep AppKit and wall-clock reads out of it so transitions stay reproducible in tests. Both placements feed it from `AppState.barPhase`.
+- Typo is drawn once per expression into sprites and moved by Core Animation layers. Do not return to per-frame vector redraw.
+- A caret move means different things by stage: while the user talks it is the user moving the caret (walk); after the talking it is the text landing (leap immediately). Apps reflow text boxes without posting notifications, so the caret is also polled: 1 s while listening, 80 ms while thinking, 40 ms during a leap.
+- **Locked target**: interactive dictation captures a `DictationDestination` at recording start and delivers there even if the user visits other windows. If the place cannot be brought back, the words go to the clipboard (`copiedTargetGone`); never paste into whatever is frontmost. Automation entry points keep `activateAndConfirm`.
+- **Attachments** are collected only while recording. Selecting text elsewhere is a quote; selecting inside the box being dictated into is editing. Screenshots are taken only by shortcut, never by intercepting clicks. Screen Recording permission is requested on the first screenshot.
+- Quotes travel through rewriting LLM modes as `⟦Qn⟧` markers that must come back exactly once.
+- **Network loss**: a dropped stream keeps recording; on release the whole recording is recognized again and delivered through the normal path. Only one path may end a session. If the retry fails, the words heard so far are still delivered and the recording is kept for a week to recognize again from history.
+- Typo, attachment, and network copy is bilingual and must follow the Localization rules below; Typo honours Reduce Motion.
 
 ## Development Lessons & Patterns
 
@@ -343,7 +373,7 @@ let hasSherpaFramework = FileManager.default.fileExists(
 This allows the project to build even without the framework (graceful degradation).
 
 ### Sound Feedback
-- `StartSoundStyle` enum: off, chime, keyboard, waterDrop1, waterDrop2
+- `StartSoundStyle` enum: off, chime, pluck, submerge, pong, waterDrop1, waterDrop2, keyboard
 - Bundled WAV files in `Sources/Type4Me/Resources/Sounds/`, copied to app bundle by deploy.sh
 - Use cached `AVAudioPlayer` instances for playback
 - Sound selection persisted via UserDefaults key `tf_startSound`
